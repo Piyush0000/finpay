@@ -1,14 +1,30 @@
 const axios = require('axios')
 const Transaction = require('../models/Transaction')
 const User = require('../models/User')
-const { NotFoundError, ValidationError, ConflictError } = require('@finpay/shared')
+const { NotFoundError, ValidationError, getRedisClient } = require('@finpay/shared')
 const config = require('../config')
+
+const IDEMPOTENCY_TTL_SECONDS = 86400 // 24 hours
 
 const walletClient = axios.create({ baseURL: config.walletServiceUrl })
 
 class TransactionService {
   async initiateTransfer({ senderId, receiverEmail, amount, currency = 'INR', idempotencyKey }) {
     if (!amount || amount <= 0) throw new ValidationError('Amount must be a positive integer in paisa')
+
+    // ── Idempotency check ─────────────────────────────────────────────────────
+    // If this exact request was already processed, return the cached result.
+    // Prevents double-charges if the client retries (network glitch, button tap, etc.)
+    if (idempotencyKey) {
+      const redis = getRedisClient()
+      const cacheKey = `idempotency:${senderId}:${idempotencyKey}`
+      const cached = await redis.get(cacheKey)
+      if (cached) {
+        return JSON.parse(cached)
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
 
     // find receiver
     const receiver = await User.findOne({ email: receiverEmail, status: 'active' })
@@ -63,6 +79,13 @@ class TransactionService {
       transaction.status = 'FAILED'
       transaction.failureReason = err.response?.data?.error?.message || err.message
       await transaction.save()
+    }
+
+    // Cache the settled result for idempotency (24h)
+    if (idempotencyKey) {
+      const redis = getRedisClient()
+      const cacheKey = `idempotency:${senderId}:${idempotencyKey}`
+      await redis.set(cacheKey, JSON.stringify(transaction), 'EX', IDEMPOTENCY_TTL_SECONDS)
     }
 
     return transaction

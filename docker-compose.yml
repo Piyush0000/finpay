@@ -19,6 +19,8 @@ services:
   redis:
     image: redis:7.2-alpine
     container_name: finpay-redis
+    ports:
+      - "6379:6379"
     networks:
       - finpay_internal
     healthcheck:
