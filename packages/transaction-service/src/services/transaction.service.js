@@ -2,6 +2,7 @@ const axios = require('axios')
 const Transaction = require('../models/Transaction')
 const User = require('../models/User')
 const { NotFoundError, ValidationError, getRedisClient } = require('@finpay/shared')
+const { addPaymentJob } = require('../queues/payment.queue')
 const config = require('../config')
 
 const IDEMPOTENCY_TTL_SECONDS = 86400 // 24 hours
@@ -13,18 +14,16 @@ class TransactionService {
     if (!amount || amount <= 0) throw new ValidationError('Amount must be a positive integer in paisa')
 
     // ── Idempotency check ─────────────────────────────────────────────────────
-    // If this exact request was already processed, return the cached result.
-    // Prevents double-charges if the client retries (network glitch, button tap, etc.)
+    const redis = getRedisClient()
+    const cacheKey = `idempotency:${senderId}:${idempotencyKey}`
+
     if (idempotencyKey) {
-      const redis = getRedisClient()
-      const cacheKey = `idempotency:${senderId}:${idempotencyKey}`
       const cached = await redis.get(cacheKey)
       if (cached) {
         return JSON.parse(cached)
       }
     }
     // ─────────────────────────────────────────────────────────────────────────
-
 
     // find receiver
     const receiver = await User.findOne({ email: receiverEmail, status: 'active' })
@@ -59,32 +58,18 @@ class TransactionService {
       status: 'PENDING',
     })
 
-    // advance to PROCESSING before hitting wallet-service
-    transaction.status = 'PROCESSING'
-    await transaction.save()
+    // Enqueue the transfer job for asynchronous processing by the payment-worker
+    await addPaymentJob({
+      transactionId: transaction._id.toString(),
+      senderWalletId: senderWallet.walletId,
+      receiverWalletId: receiverWallet.walletId,
+      amount,
+      currency,
+      idempotencyKey,
+    })
 
-    // execute transfer synchronously via wallet-service (Phase 1 — no queue)
-    try {
-      await walletClient.post('/wallets/internal/transfer', {
-        senderWalletId: senderWallet.walletId,
-        receiverWalletId: receiverWallet.walletId,
-        amount,
-        transactionId: transaction._id,
-      })
-
-      transaction.status = 'COMPLETED'
-      transaction.completedAt = new Date()
-      await transaction.save()
-    } catch (err) {
-      transaction.status = 'FAILED'
-      transaction.failureReason = err.response?.data?.error?.message || err.message
-      await transaction.save()
-    }
-
-    // Cache the settled result for idempotency (24h)
+    // Cache the pending transaction for idempotency (24h)
     if (idempotencyKey) {
-      const redis = getRedisClient()
-      const cacheKey = `idempotency:${senderId}:${idempotencyKey}`
       await redis.set(cacheKey, JSON.stringify(transaction), 'EX', IDEMPOTENCY_TTL_SECONDS)
     }
 

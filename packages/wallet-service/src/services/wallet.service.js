@@ -40,6 +40,10 @@ class WalletService {
       const wallet = await Wallet.findById(walletId)
       if (!wallet) throw new NotFoundError('Wallet not found')
 
+      if (wallet.status !== 'active') {
+        throw new ValidationError(`Wallet is ${wallet.status}`)
+      }
+
       if (wallet.balance < amount) {
         throw new ValidationError('Insufficient balance')
       }
@@ -82,6 +86,10 @@ class WalletService {
     try {
       const wallet = await Wallet.findById(walletId)
       if (!wallet) throw new NotFoundError('Wallet not found')
+
+      if (wallet.status !== 'active') {
+        throw new ValidationError(`Wallet is ${wallet.status}`)
+      }
 
       const balanceBefore = wallet.balance
       const balanceAfter = balanceBefore + amount

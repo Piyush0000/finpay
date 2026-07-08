@@ -1,0 +1,21 @@
+{
+  "name": "@finpay/bull-board",
+  "version": "1.0.0",
+  "description": "Bull Board visual dashboard queue UI for BullMQ",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@bull-board/api": "^5.21.3",
+    "@bull-board/express": "^5.21.3",
+    "@finpay/shared": "^1.0.0",
+    "bullmq": "^5.8.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ioredis": "^5.3.2"
+  }
+}

@@ -40,6 +40,17 @@ function setupRoutes(app, jwtVerify) {
       pathRewrite: { '^': '/transfers' },
     })
   )
+
+  // Express strips '/api/analytics' → proxy sees '/summary', etc.
+  // pathRewrite prepends '/analytics' back
+  app.use(
+    '/api/analytics',
+    createProxyMiddleware({
+      ...proxyOpts,
+      target: config.analyticsServiceUrl,
+      pathRewrite: { '^': '/analytics' },
+    })
+  )
 }
 
 module.exports = { setupRoutes }

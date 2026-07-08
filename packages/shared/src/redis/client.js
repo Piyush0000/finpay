@@ -29,4 +29,16 @@ function getRedisClient() {
   return client
 }
 
-module.exports = { getRedisClient }
+/**
+ * Returns a connection option object or client for BullMQ.
+ * BullMQ requires maxRetriesPerRequest to be null.
+ */
+function getBullMQConnection() {
+  const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379'
+  return new Redis(redisUrl, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+  })
+}
+
+module.exports = { getRedisClient, getBullMQConnection }

@@ -4,8 +4,15 @@ const { jwtVerify } = require('./middleware/jwtVerify')
 const { setupRoutes } = require('./routes')
 const config = require('./config')
 
+const cors = require('cors')
+
 const app = express()
 const logger = createLogger('api-gateway')
+
+app.use(cors({
+  origin: '*',
+  exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Idempotency-Key']
+}))
 
 // NOTE: Do NOT add express.json() here — the gateway is a pure proxy.
 // Parsing the body here consumes the stream; downstream services would receive

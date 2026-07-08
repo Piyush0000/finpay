@@ -6,6 +6,8 @@ services:
   mongo:
     image: mongo:7.0
     container_name: finpay-mongo
+    ports:
+      - "27017:27017"
     networks:
       - finpay_internal
     volumes:
@@ -103,6 +105,7 @@ services:
       - AUTH_SERVICE_URL=http://auth-service:3001
       - WALLET_SERVICE_URL=http://wallet-service:3002
       - TRANSACTION_SERVICE_URL=http://transaction-service:3003
+      - ANALYTICS_SERVICE_URL=http://analytics-service:3005
     depends_on:
       auth-service:
         condition: service_healthy
@@ -110,6 +113,95 @@ services:
         condition: service_healthy
       transaction-service:
         condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+
+  payment-worker:
+    build:
+      context: .
+      dockerfile: packages/payment-worker/Dockerfile
+    container_name: finpay-worker
+    networks:
+      - finpay_internal
+    env_file: .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/finpay
+      - WALLET_SERVICE_URL=http://wallet-service:3002
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      wallet-service:
+        condition: service_healthy
+
+  bull-board:
+    build:
+      context: .
+      dockerfile: packages/bull-board/Dockerfile
+    container_name: finpay-bull-board
+    networks:
+      - finpay_internal
+    ports:
+      - "3010:3010"
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: packages/notification-service/Dockerfile
+    container_name: finpay-notification
+    networks:
+      - finpay_internal
+    env_file: .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/finpay
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: packages/analytics-service/Dockerfile
+    container_name: finpay-analytics
+    networks:
+      - finpay_internal
+    env_file: .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/finpay
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile
+    container_name: finpay-frontend
+    networks:
+      - finpay_internal
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api-gateway
 
 volumes:
   mongo_data:

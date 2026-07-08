@@ -44,11 +44,51 @@ const walletController = {
     }
   },
 
+  // internal endpoint — debit a wallet (called by payment-worker saga)
+  async internalDebit(req, res, next) {
+    try {
+      const { walletId, amount, transactionId, description } = req.body
+      const wallet = await walletService.debit(walletId, amount, transactionId, description || 'Transfer out')
+      res.json({ success: true, balance: wallet.balance })
+    } catch (err) {
+      next(err)
+    }
+  },
+
+  // internal endpoint — credit a wallet (called by payment-worker saga)
+  async internalCredit(req, res, next) {
+    try {
+      const { walletId, amount, transactionId, description } = req.body
+      const wallet = await walletService.credit(walletId, amount, transactionId, description || 'Transfer in')
+      res.json({ success: true, balance: wallet.balance })
+    } catch (err) {
+      next(err)
+    }
+  },
+
   // internal endpoint — get wallet by userId
   async internalGetByUser(req, res, next) {
     try {
       const wallet = await walletService.getWalletByUserId(req.params.userId)
       res.json({ walletId: wallet._id, balance: wallet.balance, status: wallet.status })
+    } catch (err) {
+      next(err)
+    }
+  },
+
+  // public endpoint — add mock funds for testing/demo purposes
+  async fundWallet(req, res, next) {
+    try {
+      const userId = req.headers['x-user-id']
+      const wallet = await walletService.getWalletByUserId(userId)
+      wallet.balance += 100000 // Add ₹1,000.00 (100,000 paisa)
+      await wallet.save()
+      res.json({
+        walletId: wallet._id,
+        balance: wallet.balance,
+        currency: wallet.currency,
+        status: wallet.status,
+      })
     } catch (err) {
       next(err)
     }

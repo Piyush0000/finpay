@@ -15,7 +15,7 @@ const transactionController = {
         idempotencyKey,
       })
 
-      res.status(201).json({
+      res.status(202).json({
         transactionId: transaction._id,
         status: transaction.status,
         amount: transaction.amount,
