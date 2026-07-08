@@ -1,0 +1,113 @@
+networks:
+  finpay_internal:
+    driver: bridge
+
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: finpay-mongo
+    networks:
+      - finpay_internal
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: finpay-redis
+    networks:
+      - finpay_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: packages/auth-service/Dockerfile
+    container_name: finpay-auth
+    networks:
+      - finpay_internal
+    env_file: .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/finpay
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wallet-service:
+    build:
+      context: .
+      dockerfile: packages/wallet-service/Dockerfile
+    container_name: finpay-wallet
+    networks:
+      - finpay_internal
+    env_file: .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/finpay
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: packages/transaction-service/Dockerfile
+    container_name: finpay-transaction
+    networks:
+      - finpay_internal
+    env_file: .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/finpay
+      - WALLET_SERVICE_URL=http://wallet-service:3002
+    depends_on:
+      mongo:
+        condition: service_healthy
+      wallet-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: packages/api-gateway/Dockerfile
+    container_name: finpay-gateway
+    networks:
+      - finpay_internal
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - WALLET_SERVICE_URL=http://wallet-service:3002
+      - TRANSACTION_SERVICE_URL=http://transaction-service:3003
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      wallet-service:
+        condition: service_healthy
+      transaction-service:
+        condition: service_healthy
+
+volumes:
+  mongo_data:

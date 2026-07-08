@@ -1,0 +1,20 @@
+{
+  "name": "@finpay/notification-service",
+  "version": "1.0.0",
+  "description": "Redis PubSub subscriber — sends email notifications via Resend",
+  "main": "src/subscriber.js",
+  "scripts": {
+    "start": "node src/subscriber.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@finpay/shared": "^1.0.0",
+    "axios": "^1.7.0",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.3.0",
+    "mongoose": "^9.7.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@finpay/payment-worker",
+  "version": "1.0.0",
+  "description": "BullMQ payment saga worker",
+  "main": "src/worker.js",
+  "scripts": {
+    "start": "node src/worker.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@finpay/shared": "^1.0.0",
+    "bullmq": "^5.0.0",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.3.0",
+    "mongoose": "^9.7.0"
+  }
+}

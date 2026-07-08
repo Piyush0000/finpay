@@ -1,0 +1,61 @@
+{
+   
+  "name": "finpay",
+   
+  "version": "1.0.0",
+   
+  "private": true,
+   
+  "workspaces": [
+   
+     
+  "packages/*"
+   
+  ],
+   
+  "description": "> A distributed payment & wallet infrastructure platform inspired by real fintech systems.",
+   
+  "main": "index.js",
+   
+  "scripts": {
+   
+     
+  "test": "echo \"Error: no test specified\" && exit 1"
+   
+  },
+   
+  "repository": {
+   
+     
+  "type": "git",
+   
+     
+  "url": "git+https://github.com/Piyush0000/finpay.git"
+   
+  },
+   
+  "keywords": [],
+   
+  "author": "",
+   
+  "license": "ISC",
+   
+  "bugs": {
+   
+     
+  "url": "https://github.com/Piyush0000/finpay/issues"
+   
+  },
+   
+  "homepage": "https://github.com/Piyush0000/finpay#readme",
+   
+  "dependencies": {
+   
+     
+  "docker": "^1.0.0",
+   
+     
+  "docket": "^1.1.0"
+   
+  }
+}
