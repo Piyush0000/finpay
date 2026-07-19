@@ -200,6 +200,9 @@ services:
       - finpay_internal
     ports:
       - "5173:5173"
+    volumes:
+      - ./packages/frontend:/app/packages/frontend
+      - /app/packages/frontend/node_modules
     depends_on:
       - api-gateway
 

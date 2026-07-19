@@ -10,7 +10,7 @@ const IDEMPOTENCY_TTL_SECONDS = 86400 // 24 hours
 const walletClient = axios.create({ baseURL: config.walletServiceUrl })
 
 class TransactionService {
-  async initiateTransfer({ senderId, receiverEmail, amount, currency = 'INR', idempotencyKey }) {
+  async initiateTransfer({ senderId, receiverEmail, amount, currency = 'INR', idempotencyKey, simulateDelay, simulateError }) {
     if (!amount || amount <= 0) throw new ValidationError('Amount must be a positive integer in paisa')
 
     // ── Idempotency check ─────────────────────────────────────────────────────
@@ -66,6 +66,8 @@ class TransactionService {
       amount,
       currency,
       idempotencyKey,
+      simulateDelay,
+      simulateError,
     })
 
     // Cache the pending transaction for idempotency (24h)

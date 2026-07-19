@@ -1,12 +1,15 @@
 'use strict'
 
 require('dotenv').config()
+const crypto = require('crypto')
 const mongoose = require('mongoose')
 const axios = require('axios')
 const { Queue, Worker } = require('bullmq')
 const { getRedisClient, getBullMQConnection, createLogger } = require('@finpay/shared')
 const Notification = require('./models/Notification')
 const User = require('./models/User')
+const WebhookSubscription = require('./models/WebhookSubscription')
+const WebhookLog = require('./models/WebhookLog')
 
 const logger = createLogger('notification-service')
 
@@ -112,13 +115,104 @@ ${body}
 
   emailWorker.on('error', (err) => logger.error({ err }, 'BullMQ email-worker error'))
 
-  // ── Subscribe to Redis PubSub Payment Channels ─────────────────────────────
-  const channels = ['channel:payment.completed', 'channel:payment.failed']
+  // ── Setup BullMQ Queue & Worker for Webhooks ────────────────────────────
+  const webhookQueue = new Queue('webhook-queue', {
+    connection: bullMQConnection,
+    defaultJobOptions: {
+      attempts: 5,
+      backoff: {
+        type: 'exponential',
+        delay: 5000,
+      },
+      removeOnComplete: false,
+      removeOnFail: false,
+    },
+  })
+
+  const webhookWorker = new Worker(
+    'webhook-queue',
+    async (job) => {
+      const { logId } = job.data
+      logger.info({ logId }, 'Processing webhook delivery job')
+
+      const log = await WebhookLog.findById(logId)
+      if (!log) {
+        logger.error({ logId }, 'WebhookLog record not found')
+        return
+      }
+
+      const sub = await WebhookSubscription.findOne({ userId: log.userId })
+      if (!sub || sub.status !== 'active') {
+        logger.warn({ logId, userId: log.userId }, 'Webhook subscription inactive or not found, canceling dispatch')
+        log.status = 'failed'
+        log.responseBody = 'Subscription inactive or deleted'
+        await log.save()
+        return
+      }
+
+      log.attempts += 1
+
+      try {
+        const stringPayload = JSON.stringify(log.payload)
+        const signature = crypto.createHmac('sha256', sub.secret).update(stringPayload).digest('hex')
+
+        const res = await axios.post(log.url, log.payload, {
+          headers: {
+            'Content-Type': 'application/json',
+            'X-FinPay-Signature': signature,
+            'X-FinPay-Event': log.eventType,
+          },
+          timeout: 5000,
+        })
+
+        log.statusCode = res.status
+        log.responseBody = typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data)
+        log.status = 'success'
+        await log.save()
+        logger.info({ logId, url: log.url, statusCode: res.status }, 'Webhook delivered successfully')
+      } catch (err) {
+        log.statusCode = err.response?.status || 500
+        log.responseBody = err.response?.data ? (typeof err.response.data === 'object' ? JSON.stringify(err.response.data) : String(err.response.data)) : err.message
+        log.status = 'failed'
+        await log.save()
+
+        logger.error({ err, logId, url: log.url }, 'Webhook delivery attempt failed')
+        throw err
+      }
+    },
+    {
+      connection: bullMQConnection,
+      concurrency: 3,
+    }
+  )
+
+  webhookWorker.on('error', (err) => logger.error({ err }, 'BullMQ webhook-worker error'))
+
+  // ── Subscribe to Redis PubSub Payment & Telemetry Channels ──────────────────
+  const channels = ['channel:payment.completed', 'channel:payment.failed', 'channel:webhook.retry']
   await redisPubSub.subscribe(...channels)
-  logger.info({ channels }, 'Subscribed to Redis PubSub payment event channels')
+  logger.info({ channels }, 'Subscribed to Redis PubSub payment and retry channels')
 
   redisPubSub.on('message', async (channel, message) => {
     logger.info({ channel }, 'Received message from PubSub channel')
+
+    // Handle Manual Retry Signal
+    if (channel === 'channel:webhook.retry') {
+      try {
+        const { logId } = JSON.parse(message)
+        logger.info({ logId }, 'Received manual webhook retry request')
+        const log = await WebhookLog.findById(logId)
+        if (log) {
+          log.status = 'failed'
+          await log.save()
+          await webhookQueue.add('send-webhook', { logId: log._id.toString() })
+        }
+      } catch (err) {
+        logger.error(err, 'Failed to process webhook retry message')
+      }
+      return
+    }
+
     try {
       const event = JSON.parse(message)
       const { transactionId, senderId, receiverId, amount, status, failureReason } = event
@@ -136,6 +230,7 @@ ${body}
         return
       }
 
+      // ── Dispatch Email notifications ──────────────────────────────────────
       if (status === 'COMPLETED') {
         // Dispatch to Sender (Debit notice)
         const senderSubject = `FinPay: Transfer Successful - ₹${amountFormatted}`
@@ -191,6 +286,40 @@ ${body}
           body: failureBody,
         })
       }
+
+      // ── Webhook Trigger ────────────────────────────────────────────────────
+      try {
+        const sub = await WebhookSubscription.findOne({ userId: senderId })
+        if (sub && sub.status === 'active') {
+          const log = await WebhookLog.create({
+            userId: senderId,
+            transactionId,
+            url: sub.url,
+            eventType: `payment.${status.toLowerCase()}`,
+            payload: {
+              event: `payment.${status.toLowerCase()}`,
+              data: {
+                transactionId,
+                senderEmail: sender.email,
+                receiverEmail: receiver.email,
+                amount,
+                currency,
+                status,
+                failureReason: failureReason || '',
+                timestamp: new Date().toISOString(),
+              }
+            },
+            attempts: 0,
+            status: 'failed',
+          })
+
+          await webhookQueue.add('send-webhook', { logId: log._id.toString() })
+          logger.info({ transactionId, logId: log._id.toString() }, 'Enqueued webhook delivery task')
+        }
+      } catch (webhookErr) {
+        logger.error({ webhookErr, transactionId }, 'Failed to schedule webhook dispatch')
+      }
+
     } catch (err) {
       logger.error({ err, message }, 'Error processing payment PubSub message')
     }

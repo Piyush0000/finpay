@@ -66,7 +66,7 @@ async function start() {
   const worker = new Worker(
     'payment-queue',
     async (job) => {
-      const { transactionId } = job.data
+      const { transactionId, simulateDelay, simulateError } = job.data
       logger.info({ transactionId, jobId: job.id }, 'Processing payment job')
 
       const tx = await Transaction.findById(transactionId)
@@ -78,6 +78,23 @@ async function start() {
       // If already settled, do nothing (idempotent job run)
       if (['COMPLETED', 'FAILED', 'ROLLED_BACK'].includes(tx.status)) {
         logger.info({ transactionId, status: tx.status }, 'Transaction already settled, skipping')
+        return
+      }
+
+      // ── Artificial Latency Simulation ──────────────────────────────────────
+      if (simulateDelay) {
+        logger.info({ transactionId, simulateDelay }, 'Simulating artificial latency delay...')
+        await new Promise(r => setTimeout(r, simulateDelay))
+      }
+
+      // ── Artificial Error Simulation ────────────────────────────────────────
+      if (simulateError) {
+        logger.warn({ transactionId, simulateError }, 'Simulating artificial transaction error')
+        tx.status = 'FAILED'
+        tx.failureReason = `Simulated error: ${simulateError}`
+        await tx.save()
+        await updateIdempotencyCache(tx)
+        await publishPaymentEvent(tx)
         return
       }
 
