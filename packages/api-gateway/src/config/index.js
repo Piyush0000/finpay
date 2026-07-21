@@ -7,4 +7,5 @@ module.exports = {
   walletServiceUrl: process.env.WALLET_SERVICE_URL || 'http://localhost:3002',
   transactionServiceUrl: process.env.TRANSACTION_SERVICE_URL || 'http://localhost:3003',
   analyticsServiceUrl: process.env.ANALYTICS_SERVICE_URL || 'http://localhost:3005',
+  paymentLinkServiceUrl: process.env.PAYMENT_LINK_SERVICE_URL || 'http://localhost:3006',
 }

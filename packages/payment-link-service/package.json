@@ -1,0 +1,17 @@
+{
+  "name": "@finpay/payment-link-service",
+  "version": "1.0.0",
+  "description": "Microservice for managing and executing payment links using FinPay SDK",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js"
+  },
+  "dependencies": {
+    "@finpay/shared": "^1.0.0",
+    "@piyush2205/finpay-sdk": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mongoose": "^9.7.0"
+  }
+}

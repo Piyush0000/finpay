@@ -22,7 +22,7 @@ services:
     image: redis:7.2-alpine
     container_name: finpay-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     networks:
       - finpay_internal
     healthcheck:
@@ -106,6 +106,7 @@ services:
       - WALLET_SERVICE_URL=http://wallet-service:3002
       - TRANSACTION_SERVICE_URL=http://transaction-service:3003
       - ANALYTICS_SERVICE_URL=http://analytics-service:3005
+      - PAYMENT_LINK_SERVICE_URL=http://payment-link-service:3006
     depends_on:
       auth-service:
         condition: service_healthy
@@ -143,7 +144,7 @@ services:
     networks:
       - finpay_internal
     ports:
-      - "3010:3010"
+      - "3080:3010"
     env_file: .env
     depends_on:
       redis:
@@ -205,6 +206,26 @@ services:
       - /app/packages/frontend/node_modules
     depends_on:
       - api-gateway
+
+  payment-link-service:
+    build:
+      context: .
+      dockerfile: packages/payment-link-service/Dockerfile
+    container_name: finpay-payment-link-service
+    networks:
+      - finpay_internal
+    ports:
+      - "3086:3006"
+    environment:
+      - PORT=3006
+      - MONGO_URI=mongodb://mongo:27017/finpay
+      - REDIS_URL=redis://redis:6379
+      - API_GATEWAY_URL=http://api-gateway:3000/api
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   mongo_data:

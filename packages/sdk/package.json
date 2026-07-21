@@ -1,0 +1,11 @@
+{
+  "name": "@piyush2205/finpay-sdk",
+  "version": "1.0.0",
+  "description": "Official Node.js SDK for the FinPay distributed payment core.",
+  "main": "index.js",
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "author": "Piyush Rathore",
+  "license": "MIT"
+}

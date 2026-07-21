@@ -51,6 +51,17 @@ function setupRoutes(app, jwtVerify) {
       pathRewrite: { '^': '/analytics' },
     })
   )
+
+  // Express strips '/api/payment-links' → proxy sees '/', '/:id', etc.
+  // pathRewrite prepends '/payment-links' back
+  app.use(
+    '/api/payment-links',
+    createProxyMiddleware({
+      ...proxyOpts,
+      target: config.paymentLinkServiceUrl,
+      pathRewrite: { '^': '/payment-links' },
+    })
+  )
 }
 
 module.exports = { setupRoutes }

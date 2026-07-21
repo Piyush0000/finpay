@@ -26,8 +26,9 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '')
   const [user, setUser] = useState(null)
   
-  // Navigation
-  const [activeTab, setActiveTab] = useState('dashboard') // dashboard, telemetry
+  // Navigation State
+  const [activeRole, setActiveRole] = useState('merchant') // merchant, admin, developer
+  const [activeTab, setActiveTab] = useState('portal') // dynamic based on role
   const [avatarIndex, setAvatarIndex] = useState(parseInt(localStorage.getItem('avatarIndex') || '0', 10))
 
   // Auth Form state
@@ -64,6 +65,15 @@ export default function App() {
   const [showWebhookSecret, setShowWebhookSecret] = useState(false)
   const [expandedLogId, setExpandedLogId] = useState(null)
 
+  // Payment Links States
+  const [paymentLinks, setPaymentLinks] = useState([])
+  const [paymentLinkDescInput, setPaymentLinkDescInput] = useState('')
+  const [paymentLinkAmountInput, setPaymentLinkAmountInput] = useState('')
+  const [paymentLinksLoading, setPaymentLinksLoading] = useState(false)
+  const [checkoutModalLink, setCheckoutModalLink] = useState(null) // payment link being paid
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [checkoutResult, setCheckoutResult] = useState(null) // success/error alert
+
   // Saga Polling State
   const [processingTx, setProcessingTx] = useState(null)
   const pollTimerRef = useRef(null)
@@ -92,13 +102,31 @@ export default function App() {
     }
   }, [user])
 
-  // Poll Webhook settings when telemetry page is loaded
+  // Load webhook data when activeRole is developer
   useEffect(() => {
-    if (user && activeTab === 'telemetry') {
+    if (user && activeRole === 'developer') {
       fetchWebhookSubscription()
       fetchWebhookLogs()
     }
-  }, [user, activeTab])
+  }, [user, activeRole, activeTab])
+
+  // Load payment links data
+  useEffect(() => {
+    if (user && activeRole === 'merchant' && activeTab === 'payment-links') {
+      fetchPaymentLinks()
+    }
+  }, [user, activeRole, activeTab])
+
+  // Adjust active tab automatically when activeRole changes
+  useEffect(() => {
+    if (activeRole === 'merchant') {
+      setActiveTab('portal')
+    } else if (activeRole === 'admin') {
+      setActiveTab('health')
+    } else if (activeRole === 'developer') {
+      setActiveTab('webhooks')
+    }
+  }, [activeRole])
 
   useEffect(() => {
     return () => {
@@ -275,6 +303,81 @@ export default function App() {
     }
   }
 
+  // ── Payment Links API Fetchers ──────────────────────────────────────────────
+
+  const fetchPaymentLinks = async () => {
+    setPaymentLinksLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/payment-links`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setPaymentLinks(data)
+      }
+    } catch (err) {
+      console.error('Failed to fetch payment links', err)
+    } finally {
+      setPaymentLinksLoading(false)
+    }
+  }
+
+  const handleCreatePaymentLink = async (e) => {
+    e.preventDefault()
+    const amountInPaisa = Math.round(parseFloat(paymentLinkAmountInput) * 100)
+    if (isNaN(amountInPaisa) || amountInPaisa <= 0) {
+      alert('Please enter a valid amount')
+      return
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/payment-links`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          amount: amountInPaisa,
+          description: paymentLinkDescInput,
+          merchantEmail: user.email
+        })
+      })
+      if (res.ok) {
+        setPaymentLinkAmountInput('')
+        setPaymentLinkDescInput('')
+        fetchPaymentLinks()
+      }
+    } catch (err) {
+      console.error('Failed to create payment link', err)
+    }
+  }
+
+  const handlePayPaymentLink = async (linkId) => {
+    setCheckoutLoading(true)
+    setCheckoutResult(null)
+    try {
+      const res = await fetch(`${API_BASE}/payment-links/${linkId}/pay`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setCheckoutResult({ success: true, message: 'Checkout Payment Settled successfully!' })
+        fetchPaymentLinks()
+        fetchWallet()
+        fetchTransactions(1)
+        fetchAnalytics()
+      } else {
+        setCheckoutResult({ success: false, message: data.error?.message || 'Checkout failed' })
+      }
+    } catch (err) {
+      setCheckoutResult({ success: false, message: err.message })
+    } finally {
+      setCheckoutLoading(false)
+    }
+  }
+
   // ── Auth Handlers ─────────────────────────────────────────────────────────────
 
   const handleAuthSubmit = async (e) => {
@@ -317,7 +420,7 @@ export default function App() {
     setWallet(null)
     setTransactions([])
     setAnalytics(null)
-    setActiveTab('dashboard')
+    setActiveRole('merchant')
   }
 
   const cycleAvatar = () => {
@@ -496,7 +599,7 @@ export default function App() {
       <div style={styles.telemetryTicker}>
         <span style={styles.tickerBadge}>LIVE TELEMETRY</span>
         <span style={styles.tickerText}>
-          ⚡ <b>11 / 11</b> Services Active & Healthy • Average Saga Settlement Time: <b>430ms</b> • Distributed Locks: <b>Lock Acquired (OK)</b> • Rate Limits: <b>Operational</b>
+          ⚡ <b>12 / 12</b> Services Active & Healthy • Average Saga Settlement Time: <b>430ms</b> • Distributed Locks: <b>Lock Acquired (OK)</b> • Rate Limits: <b>Operational</b>
         </span>
       </div>
 
@@ -507,19 +610,30 @@ export default function App() {
             <div style={styles.navBrand}>
               <span style={styles.brandSymbol}>⚡</span> FinPay
             </div>
-            <div style={styles.navTabs}>
-              <button 
-                style={activeTab === 'dashboard' ? styles.activeTabBtn : styles.tabBtn} 
-                onClick={() => setActiveTab('dashboard')}
-              >
-                💳 Transfer Portal
-              </button>
-              <button 
-                style={activeTab === 'telemetry' ? styles.activeTabBtn : styles.tabBtn} 
-                onClick={() => setActiveTab('telemetry')}
-              >
-                🩺 System Map & Health
-              </button>
+            
+            {/* Horizontal Role Selector Ticker */}
+            <div style={styles.roleContainer}>
+              <span style={{ fontSize: '11px', fontWeight: '800', color: 'var(--text-muted)' }}>ROLE:</span>
+              <div style={styles.roleGroup}>
+                <button 
+                  style={activeRole === 'merchant' ? styles.activeRoleBtn : styles.roleBtn}
+                  onClick={() => setActiveRole('merchant')}
+                >
+                  💳 Client Portal
+                </button>
+                <button 
+                  style={activeRole === 'admin' ? styles.activeRoleBtn : styles.roleBtn}
+                  onClick={() => setActiveRole('admin')}
+                >
+                  🛡️ Platform Operator
+                </button>
+                <button 
+                  style={activeRole === 'developer' ? styles.activeRoleBtn : styles.roleBtn}
+                  onClick={() => setActiveRole('developer')}
+                >
+                  ⚙️ Integration Dev
+                </button>
+              </div>
             </div>
           </div>
           
@@ -542,180 +656,354 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Router */}
-      {activeTab === 'dashboard' ? (
-        <main style={styles.mainGrid}>
-          {/* Left Column: Balance & Transfer */}
-          <section style={styles.leftCol}>
-            <div style={{ ...styles.card, ...styles.crazyGradientCard }}>
-              <div style={styles.crazyGradientOverlay}></div>
-              <div style={{ position: 'relative', zIndex: 2 }}>
-                <h3 style={{ ...styles.cardTitle, color: 'rgba(255,255,255,0.7)' }}>Digital Balance</h3>
-                {walletLoading ? (
-                  <div style={{ ...styles.loaderPlaceholder, color: '#fff' }}>Loading secure ledger details...</div>
-                ) : wallet ? (
-                  <div style={styles.walletContent}>
-                    <div style={{ ...styles.balanceBig, color: '#ffffff', textShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-                      ₹{(wallet.balance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </div>
-                    <div style={{ ...styles.walletDetails, borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: '16px' }}>
-                      <div style={styles.detailRow}>
-                        <span style={{ color: 'rgba(255,255,255,0.8)' }}>Wallet ID:</span>
-                        <code style={{ ...styles.code, backgroundColor: 'rgba(255,255,255,0.15)', color: '#fff' }}>{wallet.walletId}</code>
+      {/* Structured Sidebar Layout */}
+      <div style={styles.workspaceWrapper}>
+        <aside style={styles.sidebar}>
+          <div style={styles.sidebarTitle}>Navigation</div>
+          <nav style={styles.sidebarNav}>
+            {activeRole === 'merchant' && (
+              <>
+                <button 
+                  style={activeTab === 'portal' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('portal')}
+                >
+                  💳 Account Overview
+                </button>
+                <button 
+                  style={activeTab === 'payment-links' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('payment-links')}
+                >
+                  🔗 Payment Links
+                </button>
+                <button 
+                  style={activeTab === 'ledger' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('ledger')}
+                >
+                  📋 Ledger Ledger History
+                </button>
+              </>
+            )}
+
+            {activeRole === 'admin' && (
+              <>
+                <button 
+                  style={activeTab === 'health' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('health')}
+                >
+                  🩺 Diagnostic Health
+                </button>
+                <button 
+                  style={activeTab === 'flowmap' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('flowmap')}
+                >
+                  🗺️ Transaction Map
+                </button>
+                <button 
+                  style={activeTab === 'analytics' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('analytics')}
+                >
+                  📈 Core Aggregates
+                </button>
+              </>
+            )}
+
+            {activeRole === 'developer' && (
+              <>
+                <button 
+                  style={activeTab === 'webhooks' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('webhooks')}
+                >
+                  ⚙️ Webhooks config
+                </button>
+                <button 
+                  style={activeTab === 'logs' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('logs')}
+                >
+                  📋 Delivery logs
+                </button>
+                <button 
+                  style={activeTab === 'sdk' ? styles.activeSidebarBtn : styles.sidebarBtn}
+                  onClick={() => setActiveTab('sdk')}
+                >
+                  📦 Node.js NPM SDK
+                </button>
+              </>
+            )}
+          </nav>
+        </aside>
+
+        {/* Right Content panel */}
+        <section style={styles.contentPanel}>
+
+          {/* VIEW: MERCHANT - Portal */}
+          {activeRole === 'merchant' && activeTab === 'portal' && (
+            <div style={styles.grid2Col}>
+              <div style={styles.flexColGap}>
+                <div style={{ ...styles.card, ...styles.crazyGradientCard }}>
+                  <div style={styles.crazyGradientOverlay}></div>
+                  <div style={{ position: 'relative', zIndex: 2 }}>
+                    <h3 style={{ ...styles.cardTitle, color: 'rgba(255,255,255,0.7)' }}>Digital Balance</h3>
+                    {walletLoading ? (
+                      <div style={{ ...styles.loaderPlaceholder, color: '#fff' }}>Loading secure ledger details...</div>
+                    ) : wallet ? (
+                      <div style={styles.walletContent}>
+                        <div style={{ ...styles.balanceBig, color: '#ffffff', textShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+                          ₹{(wallet.balance / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </div>
+                        <div style={{ ...styles.walletDetails, borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: '16px' }}>
+                          <div style={styles.detailRow}>
+                            <span style={{ color: 'rgba(255,255,255,0.8)' }}>Wallet ID:</span>
+                            <code style={{ ...styles.code, backgroundColor: 'rgba(255,255,255,0.15)', color: '#fff' }}>{wallet.walletId}</code>
+                          </div>
+                          <div style={styles.detailRow}>
+                            <span style={{ color: 'rgba(255,255,255,0.8)' }}>Status:</span>
+                            <span className="badge badge-success" style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none' }}>
+                              {wallet.status}
+                            </span>
+                          </div>
+                          <button className="btn" style={styles.whiteFundBtn} onClick={fundWalletDemo}>
+                            💰 Add Mock ₹1,000.00
+                          </button>
+                        </div>
                       </div>
-                      <div style={styles.detailRow}>
-                        <span style={{ color: 'rgba(255,255,255,0.8)' }}>Status:</span>
-                        <span className="badge badge-success" style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none' }}>
-                          {wallet.status}
-                        </span>
+                    ) : (
+                      <div style={styles.noWalletBox}>
+                        <p style={{ ...styles.noWalletText, color: '#fff' }}>No digital wallet exists for this account.</p>
+                        <button className="btn btn-secondary" style={{ width: '100%' }} onClick={createWallet}>
+                          Create Active Wallet
+                        </button>
                       </div>
-                      <button
-                        className="btn"
-                        style={styles.whiteFundBtn}
-                        onClick={fundWalletDemo}
-                      >
-                        💰 Add Mock ₹1,000.00
+                    )}
+                  </div>
+                </div>
+
+                <div style={styles.card}>
+                  <h3 style={styles.cardTitle}>Instant Transfer</h3>
+                  {wallet ? (
+                    <form onSubmit={handleTransferSubmit} style={styles.transferForm}>
+                      <div style={styles.formGroup}>
+                        <label style={styles.label}>Recipient Email</label>
+                        <input
+                          type="email"
+                          placeholder="recipient@domain.com"
+                          value={recipientEmail}
+                          onChange={e => setRecipientEmail(e.target.value)}
+                          required
+                          disabled={transferLoading}
+                        />
+                      </div>
+                      <div style={styles.formGroup}>
+                        <label style={styles.label}>Amount (₹)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={amount}
+                          onChange={e => setAmount(e.target.value)}
+                          required
+                          disabled={transferLoading}
+                        />
+                      </div>
+
+                      {transferError && <div style={styles.errorAlert}>{transferError}</div>}
+                      {transferSuccess && <div style={styles.successAlert}>{transferSuccess}</div>}
+
+                      {processingTx && (
+                        <div style={styles.sagaProgressBox}>
+                          <div style={styles.sagaRow}>
+                            <span style={styles.spinner}></span>
+                            <span>
+                              Saga Pipeline: <code style={styles.code}>{processingTx.id}</code>
+                            </span>
+                          </div>
+                          <div style={styles.sagaStatusRow}>
+                            <span>Status:</span>
+                            <span className={`badge ${processingTx.status === 'PENDING' || processingTx.status === 'PROCESSING' ? 'badge-pending' : 'badge-failed'}`}>
+                              {processingTx.status}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }} disabled={transferLoading || wallet.status !== 'active'}>
+                        {transferLoading ? 'Processing Secure Transfer...' : 'Initiate Instant Transfer'}
                       </button>
+                    </form>
+                  ) : (
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Create an active wallet first.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Dev Sandbox Controls inside portal */}
+              <div>
+                <div style={styles.card}>
+                  <h3 style={styles.cardTitle}>🛠️ Sandbox Simulation Settings</h3>
+                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                    Trigger latency delays or force transactions to decline. Parameters are injected dynamically on your next transfer.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={styles.formGroup}>
+                      <label style={styles.label}>X-Simulate-Delay (Artificial Latency)</label>
+                      <select value={simulateDelay} onChange={e => setSimulateDelay(parseInt(e.target.value, 10))}>
+                        <option value={0}>0ms (Instant Settlement)</option>
+                        <option value={2000}>2000ms (2s delay)</option>
+                        <option value={4000}>4000ms (4s delay)</option>
+                      </select>
+                    </div>
+                    <div style={styles.formGroup}>
+                      <label style={styles.label}>X-Simulate-Error (Throw Custom Exception)</label>
+                      <select value={simulateError} onChange={e => setSimulateError(e.target.value)}>
+                        <option value="">None (Standard Transaction Flow)</option>
+                        <option value="CARD_DECLINED">CARD_DECLINED (Declined by Issuer)</option>
+                        <option value="EXPIRED_CARD">EXPIRED_CARD (Card expired)</option>
+                        <option value="INSUFFICIENT_FUNDS">INSUFFICIENT_FUNDS (Trigger Balance Compensation)</option>
+                        <option value="LIMIT_EXCEEDED">LIMIT_EXCEEDED (Limit Block)</option>
+                      </select>
                     </div>
                   </div>
-                ) : (
-                  <div style={styles.noWalletBox}>
-                    <p style={{ ...styles.noWalletText, color: '#fff' }}>No digital wallet exists for this account.</p>
-                    <button className="btn btn-secondary" style={{ width: '100%' }} onClick={createWallet}>
-                      Create Active Wallet
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VIEW: MERCHANT - Payment Links */}
+          {activeRole === 'merchant' && activeTab === 'payment-links' && (
+            <div style={styles.grid2Col}>
+              {/* Left Form */}
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>🔗 Generate Payment Link</h3>
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                  Create shareable checkout pages for your clients. They will pay directly using the published SDK under the hood.
+                </p>
+                <form onSubmit={handleCreatePaymentLink} style={styles.transferForm}>
+                  <div style={styles.formGroup}>
+                    <label style={styles.label}>Amount (₹)</label>
+                    <input 
+                      type="number" 
+                      step="0.01" 
+                      placeholder="0.00"
+                      value={paymentLinkAmountInput}
+                      onChange={e => setPaymentLinkAmountInput(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div style={styles.formGroup}>
+                    <label style={styles.label}>Description / Order ID</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Mechanical Keyboard"
+                      value={paymentLinkDescInput}
+                      onChange={e => setPaymentLinkDescInput(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }}>
+                    Generate Shareable Link
+                  </button>
+                </form>
+              </div>
+
+              {/* Right List */}
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>Active Links</h3>
+
+                {/* Settle a Link search box */}
+                <div style={{ marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px dashed var(--border-subtle)' }}>
+                  <label style={styles.label}>Pay by Link ID</label>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                    <input 
+                      type="text" 
+                      placeholder="Paste Link ID (e.g. 6a4e...)"
+                      id="searchLinkIdInput"
+                      style={{ flex: 1, padding: '8px 12px', fontSize: '12px', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}
+                    />
+                    <button 
+                      className="btn btn-primary" 
+                      style={{ padding: '0 16px', fontSize: '12px' }}
+                      onClick={async () => {
+                        const inputVal = document.getElementById('searchLinkIdInput').value.trim()
+                        if (!inputVal) return
+                        try {
+                          const res = await fetch(`${API_BASE}/payment-links/${inputVal}`, {
+                            headers: { Authorization: `Bearer ${token}` }
+                          })
+                          if (res.ok) {
+                            const fetchedLink = await res.json()
+                            setCheckoutModalLink(fetchedLink)
+                            setCheckoutResult(null)
+                          } else {
+                            alert('Link ID not found')
+                          }
+                        } catch (err) {
+                          alert('Error fetching Link ID')
+                        }
+                      }}
+                    >
+                      Search & Pay
                     </button>
                   </div>
+                </div>
+
+                {paymentLinksLoading ? (
+                  <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Loading links...</p>
+                ) : paymentLinks.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '350px', overflowY: 'auto' }}>
+                    {paymentLinks.map(link => (
+                      <div key={link._id} style={{ border: '1px solid var(--border-subtle)', borderRadius: '12px', padding: '14px', backgroundColor: '#fff' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <strong style={{ fontSize: '13px' }}>{link.description}</strong>
+                          <span className={`badge ${link.status === 'paid' ? 'badge-success' : 'badge-pending'}`}>
+                            {link.status}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            Amount: <b>₹{(link.amount / 100).toFixed(2)}</b>
+                          </span>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            {link.status === 'active' && (
+                              <button 
+                                className="btn btn-secondary" 
+                                style={{ padding: '4px 10px', fontSize: '11px', borderColor: 'var(--border-subtle)' }}
+                                onClick={() => {
+                                  navigator.clipboard.writeText(link._id)
+                                  alert('Copied Link ID to clipboard!')
+                                }}
+                              >
+                                📋 Copy ID
+                              </button>
+                            )}
+                            {link.status === 'active' ? (
+                              <button 
+                                className="btn btn-secondary" 
+                                style={{ padding: '4px 10px', fontSize: '11px', borderColor: 'var(--accent-primary)', color: 'var(--accent-primary)' }}
+                                onClick={() => {
+                                  setCheckoutModalLink(link)
+                                  setCheckoutResult(null)
+                                }}
+                              >
+                                🛒 Checkout
+                              </button>
+                            ) : (
+                              <code style={styles.code}>{link.transactionId.slice(0, 12)}...</code>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p style={{ fontStyle: 'italic', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '20px' }}>
+                    No payment links generated yet.
+                  </p>
                 )}
               </div>
             </div>
+          )}
 
-            <div style={styles.card}>
-              <h3 style={styles.cardTitle}>Instant Transfer</h3>
-              {wallet ? (
-                <form onSubmit={handleTransferSubmit} style={styles.transferForm}>
-                  <div style={styles.formGroup}>
-                    <label style={styles.label}>Recipient Email</label>
-                    <input
-                      type="email"
-                      placeholder="recipient@domain.com"
-                      value={recipientEmail}
-                      onChange={e => setRecipientEmail(e.target.value)}
-                      required
-                      disabled={transferLoading}
-                    />
-                  </div>
-                  <div style={styles.formGroup}>
-                    <label style={styles.label}>Amount (₹)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={amount}
-                      onChange={e => setAmount(e.target.value)}
-                      required
-                      disabled={transferLoading}
-                    />
-                  </div>
-
-                  {transferError && <div style={styles.errorAlert}>{transferError}</div>}
-                  {transferSuccess && <div style={styles.successAlert}>{transferSuccess}</div>}
-
-                  {processingTx && (
-                    <div style={styles.sagaProgressBox}>
-                      <div style={styles.sagaRow}>
-                        <span style={styles.spinner}></span>
-                        <span>
-                          Saga Pipeline Execution: <code style={styles.code}>{processingTx.id}</code>
-                        </span>
-                      </div>
-                      <div style={styles.sagaStatusRow}>
-                        <span>Status:</span>
-                        <span className={`badge ${processingTx.status === 'PENDING' || processingTx.status === 'PROCESSING' ? 'badge-pending' : 'badge-failed'}`}>
-                          {processingTx.status}
-                        </span>
-                      </div>
-                      <p style={styles.sagaTip}>Background payment-worker is processing locks and ledger updates...</p>
-                    </div>
-                  )}
-
-                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }} disabled={transferLoading || wallet.status !== 'active'}>
-                    {transferLoading ? 'Processing Secure Transfer...' : 'Initiate Instant Transfer'}
-                  </button>
-                </form>
-              ) : (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Create an active wallet first to send transfers.</p>
-              )}
-            </div>
-
-            {/* Sandbox Simulation Header Panel */}
-            <div style={styles.card}>
-              <h3 style={styles.cardTitle}>🛠️ Developer Simulation Settings</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                Simulate latency or throw custom exceptions. Active values will be injected as client request headers on your next transfer.
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>X-Simulate-Delay (Artificial Latency)</label>
-                  <select 
-                    value={simulateDelay} 
-                    onChange={e => setSimulateDelay(parseInt(e.target.value, 10))}
-                  >
-                    <option value={0}>0ms (Instant Settlement)</option>
-                    <option value={2000}>2000ms (2s delay)</option>
-                    <option value={4000}>4000ms (4s delay)</option>
-                    <option value={6000}>6000ms (6s delay)</option>
-                  </select>
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>X-Simulate-Error (Throw Custom Exception)</label>
-                  <select 
-                    value={simulateError} 
-                    onChange={e => setSimulateError(e.target.value)}
-                  >
-                    <option value="">None (Standard Transaction Flow)</option>
-                    <option value="CARD_DECLINED">CARD_DECLINED (Declined by Issuer)</option>
-                    <option value="EXPIRED_CARD">EXPIRED_CARD (Card expired)</option>
-                    <option value="INSUFFICIENT_FUNDS">INSUFFICIENT_FUNDS (Trigger Balance compensation)</option>
-                    <option value="LIMIT_EXCEEDED">LIMIT_EXCEEDED (Limit block)</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Right Column: Ledger History & Analytics */}
-          <section style={styles.rightCol}>
-            {analytics && (
-              <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Activity Analytics ({analytics.period})</h3>
-                <div style={styles.analyticsGrid}>
-                  <div style={styles.statBox}>
-                    <span style={styles.statLabel}>Total Outbound</span>
-                    <span style={styles.statValue}>₹{(analytics.totalSent / 100).toFixed(2)}</span>
-                  </div>
-                  <div style={styles.statBox}>
-                    <span style={styles.statLabel}>Total Inbound</span>
-                    <span style={styles.statValue}>₹{(analytics.totalReceived / 100).toFixed(2)}</span>
-                  </div>
-                  <div style={styles.statBox}>
-                    <span style={styles.statLabel}>Total Transfers</span>
-                    <span style={styles.statValue}>{analytics.transactionCount}</span>
-                  </div>
-                  <div style={styles.statBox}>
-                    <span style={styles.statLabel}>Failed Transactions</span>
-                    <span style={{ ...styles.statValue, color: 'var(--accent-rose)' }}>{analytics.failedCount}</span>
-                  </div>
-                </div>
-
-                <div style={styles.graphicChart}>
-                  <div style={{ ...styles.chartBar, height: `${Math.min(100, Math.max(10, (analytics.totalSent / (analytics.totalSent + analytics.totalReceived + 1)) * 100))}%`, backgroundColor: 'var(--accent-primary)' }} title="Sent"></div>
-                  <div style={{ ...styles.chartBar, height: `${Math.min(100, Math.max(10, (analytics.totalReceived / (analytics.totalSent + analytics.totalReceived + 1)) * 100))}%`, backgroundColor: 'var(--accent-mint)' }} title="Received"></div>
-                  <div style={{ ...styles.chartBar, height: `${Math.min(100, Math.max(10, (analytics.failedCount / (analytics.transactionCount + 1)) * 100))}%`, backgroundColor: 'var(--accent-rose)' }} title="Failed"></div>
-                </div>
-              </div>
-            )}
-
+          {/* VIEW: MERCHANT - Ledger */}
+          {activeRole === 'merchant' && activeTab === 'ledger' && (
             <div style={styles.card}>
               <h3 style={styles.cardTitle}>Recent Ledger History</h3>
               {transactions.length > 0 ? (
@@ -784,29 +1072,44 @@ export default function App() {
                 <p style={styles.emptyTableText}>No transaction ledger lines found.</p>
               )}
             </div>
+          )}
 
-            <div style={styles.adminFooter}>
-              ⚙️ Backend Telemetry: <a href="http://localhost:3010/ui" target="_blank" rel="noopener noreferrer" style={styles.footerLink}>Inspect job queues on Bull Board UI</a>
+          {/* VIEW: ADMIN - Diagnostic Health */}
+          {activeRole === 'admin' && activeTab === 'health' && (
+            <div>
+              <div style={styles.welcomeBanner} style={{ marginBottom: '24px' }}>
+                <h3 style={{ fontSize: '20px', marginBottom: '8px' }}>🩺 Container Telemetry & Status</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                  Monitor backend logs, port bindings, and operational status of all 12 dockerized payment microservices.
+                </p>
+              </div>
+              <div style={styles.gridContainer}>
+                {microservicesList.map((svc) => (
+                  <div style={styles.statusCard} key={svc.name}>
+                    <div style={styles.statusCardHeader}>
+                      <div style={styles.statusCardTitle}>
+                        <span style={{ marginRight: '6px' }}>{svc.icon}</span>
+                        <b>{svc.name}</b>
+                      </div>
+                      <span style={styles.healthTag}>
+                        <span style={styles.healthDot}></span> ACTIVE
+                      </span>
+                    </div>
+                    <p style={styles.statusCardDesc}>{svc.description}</p>
+                    <div style={styles.statusCardLogs}>
+                      <code style={styles.miniLogLine}>{svc.mockLog}</code>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </section>
-        </main>
-      ) : (
-        /* Tab: Microservices Health, Map & Webhooks Dev Console */
-        <main style={styles.tabContent}>
-          <div style={styles.welcomeBanner}>
-            <h2 style={{ fontSize: '24px', color: 'var(--text-primary)', marginBottom: '8px' }}>
-              🩺 Distributed Microservices Map & Developer Console
-            </h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
-              FinPay comprises 11 decoupled services. Review active container logs, inspect system routing, or register your custom webhook receiver settings.
-            </p>
-          </div>
+          )}
 
-          <div style={styles.mapLayout}>
-            {/* Left Box: Flow Diagram & Telemetry */}
-            <div style={{ flex: '1 1 500px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {/* VIEW: ADMIN - Flow Map */}
+          {activeRole === 'admin' && activeTab === 'flowmap' && (
+            <div style={styles.flexColGap}>
               <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Transaction Pipeline Map</h3>
+                <h3 style={styles.cardTitle}>System Architecture Sequence</h3>
                 <div style={styles.architectureVisual}>
                   {architectureSteps.map((step, idx) => (
                     <div 
@@ -837,17 +1140,82 @@ export default function App() {
                     </div>
                   ) : (
                     <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: '13px' }}>
-                      💡 Hover over any numbered node above to view core technical logs and details.
+                      💡 Hover over any node step to review database lock points and message deliveries.
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Webhook Configuration Card */}
+              {/* Compensating Transaction visualizer */}
               <div style={styles.card}>
-                <h3 style={styles.cardTitle}>⚙️ Developer Webhook Subscriptions</h3>
-                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                  Register a local HTTP endpoint. FinPay will post a cryptographically signed HMAC-SHA256 signature payload whenever transaction states settle.
+                <h3 style={styles.cardTitle}>Asynchronous Saga Rollbacks Flow</h3>
+                <div style={styles.sagaSimulationVisual}>
+                  <div style={styles.simStep}>
+                    <div style={{ ...styles.simCircle, borderColor: 'var(--accent-primary)' }}>1</div>
+                    <b style={{ fontSize: '12px' }}>Initialize</b>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>202 Accepted</span>
+                  </div>
+                  <div style={styles.simLine}>➔</div>
+                  <div style={styles.simStep}>
+                    <div style={{ ...styles.simCircle, borderColor: 'var(--accent-mint)' }}>2</div>
+                    <b style={{ fontSize: '12px' }}>Debit Sender</b>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Acquire Lock</span>
+                  </div>
+                  <div style={styles.simLine}>➔</div>
+                  <div style={styles.simStep}>
+                    <div style={{ ...styles.simCircle, borderColor: 'var(--accent-rose)', backgroundColor: 'rgba(239,68,68,0.06)' }}>3</div>
+                    <b style={{ fontSize: '12px', color: 'var(--accent-rose)' }}>Credit Fail</b>
+                    <span style={{ fontSize: '10px', color: 'var(--accent-rose)' }}>Target Frozen</span>
+                  </div>
+                  <div style={styles.simLine} style={{ transform: 'rotate(180deg)', color: 'var(--accent-rose)' }}>➔</div>
+                  <div style={styles.simStep}>
+                    <div style={{ ...styles.simCircle, borderColor: 'var(--accent-primary)', backgroundColor: 'rgba(99,102,241,0.06)' }}>4</div>
+                    <b style={{ fontSize: '12px' }}>Refund</b>
+                    <span style={{ fontSize: '10px', color: 'var(--accent-primary)' }}>Rollback Auto</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VIEW: ADMIN - Analytics */}
+          {activeRole === 'admin' && activeTab === 'analytics' && analytics && (
+            <div style={styles.card}>
+              <h3 style={styles.cardTitle}>Global Aggregates</h3>
+              <div style={styles.analyticsGrid}>
+                <div style={styles.statBox}>
+                  <span style={styles.statLabel}>Total Outbound</span>
+                  <span style={styles.statValue}>₹{(analytics.totalSent / 100).toFixed(2)}</span>
+                </div>
+                <div style={styles.statBox}>
+                  <span style={styles.statLabel}>Total Inbound</span>
+                  <span style={styles.statValue}>₹{(analytics.totalReceived / 100).toFixed(2)}</span>
+                </div>
+                <div style={styles.statBox}>
+                  <span style={styles.statLabel}>Total Transfers</span>
+                  <span style={styles.statValue}>{analytics.transactionCount}</span>
+                </div>
+                <div style={styles.statBox}>
+                  <span style={styles.statLabel}>Failed Transactions</span>
+                  <span style={{ ...styles.statValue, color: 'var(--accent-rose)' }}>{analytics.failedCount}</span>
+                </div>
+              </div>
+
+              <div style={styles.graphicChart}>
+                <div style={{ ...styles.chartBar, height: `${Math.min(100, Math.max(10, (analytics.totalSent / (analytics.totalSent + analytics.totalReceived + 1)) * 100))}%`, backgroundColor: 'var(--accent-primary)' }} title="Sent"></div>
+                <div style={{ ...styles.chartBar, height: `${Math.min(100, Math.max(10, (analytics.totalReceived / (analytics.totalSent + analytics.totalReceived + 1)) * 100))}%`, backgroundColor: 'var(--accent-mint)' }} title="Received"></div>
+                <div style={{ ...styles.chartBar, height: `${Math.min(100, Math.max(10, (analytics.failedCount / (analytics.transactionCount + 1)) * 100))}%`, backgroundColor: 'var(--accent-rose)' }} title="Failed"></div>
+              </div>
+            </div>
+          )}
+
+          {/* VIEW: DEVELOPER - Webhooks settings */}
+          {activeRole === 'developer' && activeTab === 'webhooks' && (
+            <div style={styles.flexColGap}>
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>Webhook Endpoints</h3>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                  Register a target HTTP POST URL. FinPay enqueues and triggers automatic deliveries when payments resolve.
                 </p>
                 <form onSubmit={saveWebhookSubscription} style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
                   <input 
@@ -859,7 +1227,7 @@ export default function App() {
                     style={{ flex: 1 }}
                   />
                   <button type="submit" className="btn btn-primary" style={{ padding: '0 24px' }}>
-                    Save URL
+                    Register Webhook
                   </button>
                 </form>
 
@@ -870,7 +1238,7 @@ export default function App() {
                       <code style={styles.code}>{webhookSub.url}</code>
                     </div>
                     <div style={styles.detailRow} style={{ fontSize: '13px' }}>
-                      <span><strong>Signature Secret:</strong></span>
+                      <span><strong>Secret Signature Key:</strong></span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <code style={styles.code}>
                           {showWebhookSecret ? webhookSub.secret : '••••••••••••••••••••••••••••'}
@@ -886,95 +1254,261 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <p style={{ fontStyle: 'italic', fontSize: '12px', color: 'var(--text-muted)' }}>No webhook subscriber configured yet.</p>
-                )}
-              </div>
-
-              {/* Webhook Logs Panel */}
-              <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Webhook Dispatch Logs</h3>
-                {webhookLogs.length > 0 ? (
-                  <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {webhookLogs.map((log) => (
-                      <div key={log._id} style={styles.webhookLogItem}>
-                        <div style={styles.logHeader}>
-                          <span style={{ fontSize: '12px', fontWeight: '700' }}>{log.eventType}</span>
-                          <span className={`badge ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
-                            {log.status === 'success' ? `${log.statusCode} OK` : `${log.statusCode || 'ERR'}`}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
-                          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                            URL: <code style={styles.code}>{log.url}</code> • Attempts: <b>{log.attempts}</b>
-                          </span>
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            <button 
-                              className="btn btn-secondary" 
-                              style={{ padding: '4px 8px', fontSize: '10px' }}
-                              onClick={() => setExpandedLogId(expandedLogId === log._id ? null : log._id)}
-                            >
-                              {expandedLogId === log._id ? 'Close details' : 'Inspect JSON'}
-                            </button>
-                            <button 
-                              className="btn btn-secondary" 
-                              style={{ padding: '4px 8px', fontSize: '10px', borderColor: 'var(--accent-primary)' }}
-                              onClick={() => handleRetryWebhook(log._id)}
-                            >
-                              🔁 Re-send
-                            </button>
-                          </div>
-                        </div>
-
-                        {expandedLogId === log._id && (
-                          <div style={styles.logPayloadBox}>
-                            <strong>Payload Dispatched:</strong>
-                            <pre style={styles.payloadPre}>{JSON.stringify(log.payload, null, 2)}</pre>
-                            <strong style={{ marginTop: '8px', display: 'block' }}>Receiver Response Body:</strong>
-                            <pre style={styles.payloadPre}>{log.responseBody || '(No response returned)'}</pre>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p style={{ fontStyle: 'italic', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
-                    No webhook dispatches logged yet. Complete transfers to trigger deliveries.
-                  </p>
+                  <p style={{ fontStyle: 'italic', fontSize: '12px', color: 'var(--text-muted)' }}>No webhook configured yet.</p>
                 )}
               </div>
             </div>
+          )}
 
-            {/* Right Box: Health Grid */}
-            <div style={{ flex: '1 1 500px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              <div style={styles.card}>
-                <h3 style={styles.cardTitle}>Service Status Console</h3>
-                <div style={styles.telemetryList}>
-                  {microservicesList.map((svc) => (
-                    <div style={styles.telemetryItem} key={svc.name}>
-                      <div style={styles.telemetryHeader}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <span style={{ fontSize: '18px' }}>{svc.icon}</span>
-                          <span style={{ fontWeight: '700', fontSize: '14px' }}>{svc.name}</span>
-                          <code style={{ fontSize: '11px', color: 'var(--text-muted)' }}>:{svc.port}</code>
-                        </div>
-                        <span style={styles.healthTag}>
-                          <span style={styles.healthDot}></span> ACTIVE
+          {/* VIEW: DEVELOPER - Logs */}
+          {activeRole === 'developer' && activeTab === 'logs' && (
+            <div style={styles.card}>
+              <h3 style={styles.cardTitle}>Webhook Delivery logs</h3>
+              {webhookLogs.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {webhookLogs.map((log) => (
+                    <div key={log._id} style={styles.webhookLogItem}>
+                      <div style={styles.logHeader}>
+                        <span style={{ fontSize: '12px', fontWeight: '700' }}>{log.eventType}</span>
+                        <span className={`badge ${log.status === 'success' ? 'badge-success' : 'badge-failed'}`}>
+                          {log.status === 'success' ? `${log.statusCode} OK` : `${log.statusCode || 'ERR'}`}
                         </span>
                       </div>
-                      <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>{svc.description}</p>
-                      <div style={styles.statusCardLogs}>
-                        <code style={styles.miniLogLine}>{svc.mockLog}</code>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                          URL: <code style={styles.code}>{log.url}</code> • Attempts: <b>{log.attempts}</b>
+                        </span>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button 
+                            className="btn btn-secondary" 
+                            style={{ padding: '4px 8px', fontSize: '10px' }}
+                            onClick={() => setExpandedLogId(expandedLogId === log._id ? null : log._id)}
+                          >
+                            {expandedLogId === log._id ? 'Close' : 'Inspect JSON'}
+                          </button>
+                          <button 
+                            className="btn btn-secondary" 
+                            style={{ padding: '4px 8px', fontSize: '10px', borderColor: 'var(--accent-primary)' }}
+                            onClick={() => handleRetryWebhook(log._id)}
+                          >
+                            🔁 Re-send
+                          </button>
+                        </div>
                       </div>
+
+                      {expandedLogId === log._id && (
+                        <div style={styles.logPayloadBox}>
+                          <strong>Payload Dispatched:</strong>
+                          <pre style={styles.payloadPre}>{JSON.stringify(log.payload, null, 2)}</pre>
+                          <strong style={{ marginTop: '8px', display: 'block' }}>Receiver Response Body:</strong>
+                          <pre style={styles.payloadPre}>{log.responseBody || '(No response returned)'}</pre>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
+              ) : (
+                <p style={{ fontStyle: 'italic', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                  No webhook deliveries logged yet.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* VIEW: DEVELOPER - SDK Guide */}
+          {activeRole === 'developer' && activeTab === 'sdk' && (
+            <div style={styles.flexColGap}>
+              <div style={styles.card}>
+                <h3 style={styles.cardTitle}>📦 FinPay Node.js SDK Documentation</h3>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                  Build custom payment integrations easily by installing our official client SDK directly via npm.
+                </p>
+                <div style={styles.statusCardLogs} style={{ backgroundColor: '#0f172a', padding: '16px', borderRadius: '12px', marginBottom: '20px' }}>
+                  <code style={{ color: '#38bdf8', fontSize: '13px', fontFamily: 'monospace' }}>
+                    $ npm install @piyush2205/finpay-sdk
+                  </code>
+                </div>
+
+                <h4 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '10px' }}>Code Integration Snippet</h4>
+                <pre style={styles.payloadPre} style={{ fontSize: '11px', padding: '16px', maxHeight: '300px', overflowY: 'auto' }}>
+{`const FinPayClient = require('@piyush2205/finpay-sdk');
+
+const finpay = new FinPayClient({
+  apiBase: 'http://localhost:3000/api',
+  token: 'YOUR_JWT_ACCESS_TOKEN'
+});
+
+// Send transfer with artificial latency and error configs
+async function pay() {
+  const result = await finpay.transfer({
+    receiverEmail: 'bob@gmail.com',
+    amount: 15000, // ₹150.00 in paisa
+    currency: 'INR',
+    idempotencyKey: 'idem-uuid-key'
+  }, {
+    simulateDelay: 2000,
+    simulateError: 'INSUFFICIENT_FUNDS'
+  });
+  console.log('Enqueued! ID:', result.transactionId);
+}`}
+                </pre>
+
+                <h4 style={{ fontSize: '14px', fontWeight: '700', marginTop: '20px', marginBottom: '10px' }}>Cryptographic Webhook Signature Verification</h4>
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                  Incoming webhooks carry an `X-FinPay-Signature` header. Verify this signature to validate payment origins.
+                </p>
+                <pre style={styles.payloadPre} style={{ fontSize: '11px', padding: '16px', maxHeight: '300px', overflowY: 'auto' }}>
+{`const signature = req.headers['x-finpay-signature'];
+const secret = 'whsec_your_secret_key'; // Configured in Dev settings
+
+const isValid = FinPayClient.verifyWebhookSignature(req.body, signature, secret);
+
+if (isValid) {
+  console.log('Webhook is authentic! Process event safely.');
+}`}
+                </pre>
               </div>
             </div>
+          )}
+
+        </section>
+      </div>
+
+      {/* CUSTOMER CHECKOUT MODAL OVERLAY */}
+      {checkoutModalLink && (
+        <div style={overlayStyles.overlay}>
+          <div style={overlayStyles.modal}>
+            <div style={overlayStyles.header}>
+              <h3 style={{ fontSize: '18px', fontWeight: '800' }}>⚡ FinPay Instant Checkout</h3>
+              <button 
+                style={overlayStyles.closeBtn} 
+                onClick={() => {
+                  setCheckoutModalLink(null)
+                  setCheckoutResult(null)
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div style={overlayStyles.body}>
+              <div style={overlayStyles.productBox}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>Purchasing</span>
+                <div style={{ fontSize: '20px', fontWeight: '800', margin: '4px 0' }}>{checkoutModalLink.description}</div>
+                <div style={{ fontSize: '28px', fontWeight: '900', color: 'var(--accent-primary)' }}>
+                  ₹{(checkoutModalLink.amount / 100).toFixed(2)}
+                </div>
+              </div>
+
+              <div style={styles.walletDetails} style={{ margin: '20px 0' }}>
+                <div style={styles.detailRow}>
+                  <span>Merchant Recipient:</span>
+                  <b>{checkoutModalLink.merchantEmail}</b>
+                </div>
+                <div style={styles.detailRow}>
+                  <span>Customer Payee:</span>
+                  <b>{user.email}</b>
+                </div>
+                {wallet && (
+                  <div style={styles.detailRow} style={{ borderTop: '1px dashed var(--border-subtle)', paddingTop: '10px', marginTop: '10px' }}>
+                    <span>Your Wallet Balance:</span>
+                    <strong style={{ color: wallet.balance >= checkoutModalLink.amount ? 'var(--accent-mint)' : 'var(--accent-rose)' }}>
+                      ₹{(wallet.balance / 100).toFixed(2)}
+                    </strong>
+                  </div>
+                )}
+              </div>
+
+              {checkoutResult && (
+                <div style={checkoutResult.success ? styles.successAlert : styles.errorAlert} style={{ marginBottom: '16px', padding: '12px', borderRadius: '10px' }}>
+                  {checkoutResult.message}
+                </div>
+              )}
+            </div>
+
+            <div style={overlayStyles.footer}>
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => {
+                  setCheckoutModalLink(null)
+                  setCheckoutResult(null)
+                }}
+                disabled={checkoutLoading}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={() => handlePayPaymentLink(checkoutModalLink._id)}
+                disabled={checkoutLoading || (wallet && wallet.balance < checkoutModalLink.amount) || checkoutResult?.success}
+              >
+                {checkoutLoading ? 'Processing Settle...' : 'Confirm & Settle Payment'}
+              </button>
+            </div>
           </div>
-        </main>
+        </div>
       )}
     </div>
   )
+}
+
+// ── Checkout Modal Overlay Styles ─────────────────────────────────────────────
+const overlayStyles = {
+  overlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    width: '100vw',
+    height: '100vh',
+    backgroundColor: 'rgba(15, 23, 42, 0.4)',
+    backdropFilter: 'blur(4px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+  },
+  modal: {
+    backgroundColor: '#ffffff',
+    borderRadius: '24px',
+    width: '100%',
+    maxWidth: '460px',
+    padding: '32px',
+    boxShadow: '0 24px 60px -15px rgba(15, 23, 42, 0.2)',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  header: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottom: '1px solid var(--border-subtle)',
+    paddingBottom: '16px',
+  },
+  closeBtn: {
+    background: 'none',
+    border: 'none',
+    fontSize: '18px',
+    color: 'var(--text-muted)',
+    cursor: 'pointer',
+  },
+  body: {
+    padding: '20px 0 10px 0',
+  },
+  productBox: {
+    backgroundColor: 'rgba(99, 102, 241, 0.04)',
+    border: '1px solid rgba(99, 102, 241, 0.08)',
+    borderRadius: '16px',
+    padding: '20px',
+    textAlign: 'center',
+  },
+  footer: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '12px',
+    borderTop: '1px solid var(--border-subtle)',
+    paddingTop: '20px',
+    marginTop: '10px',
+  },
 }
 
 // ── Mock Microservices list ───────────────────────────────────────────
@@ -1029,11 +1563,18 @@ const microservicesList = [
     mockLog: 'analytics-service | computed monthly activity totals for period 2026-07',
   },
   {
+    name: 'payment-link-service',
+    icon: '🔗',
+    port: '3086',
+    description: 'Hosts shareable customer checkouts. Uses published NPM SDK to settle payments.',
+    mockLog: 'payment-link-service | SDK initialized & verified payment link checkout',
+  },
+  {
     name: 'bull-board',
     icon: '📊',
-    port: '3010',
+    port: '3080',
     description: 'Provides a dashboard to monitor active, failed, and completed queue jobs.',
-    mockLog: 'bull-board | Telemetry dashboard listening at http://localhost:3010/ui',
+    mockLog: 'bull-board | Telemetry dashboard listening at http://localhost:3080/ui',
   },
 ]
 
@@ -1225,9 +1766,44 @@ const styles = {
     fontFamily: 'var(--font-display)',
     color: 'var(--text-primary)',
   },
-  navTabs: {
+  roleContainer: {
     display: 'flex',
-    gap: '6px',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  roleGroup: {
+    display: 'flex',
+    backgroundColor: 'rgba(15,23,42,0.03)',
+    padding: '4px',
+    borderRadius: '8px',
+    border: '1px solid var(--border-subtle)',
+  },
+  roleBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-secondary)',
+    fontFamily: 'var(--font-display)',
+    fontWeight: '600',
+    fontSize: '11px',
+    cursor: 'pointer',
+    padding: '4px 10px',
+    borderRadius: '6px',
+    transition: 'var(--transition-smooth)',
+  },
+  activeRoleBtn: {
+    background: '#ffffff',
+    border: 'none',
+    color: 'var(--accent-primary)',
+    fontFamily: 'var(--font-display)',
+    fontWeight: '700',
+    fontSize: '11px',
+    cursor: 'pointer',
+    padding: '4px 10px',
+    borderRadius: '6px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+  },
+  navTabs: {
+    display: 'none', // replaced by sidebar navigation
   },
   tabBtn: {
     background: 'none',
@@ -1284,48 +1860,92 @@ const styles = {
     fontSize: '11px',
     color: 'var(--text-secondary)',
   },
-  mainGrid: {
+  workspaceWrapper: {
     flex: 1,
-    maxWidth: '1200px',
+    display: 'flex',
     width: '100%',
+    maxWidth: '1440px',
     margin: '0 auto',
-    padding: '32px 40px',
+  },
+  sidebar: {
+    width: '260px',
+    borderRight: '1px solid var(--border-subtle)',
+    padding: '32px 24px',
+    backgroundColor: '#ffffff',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '20px',
+  },
+  sidebarTitle: {
+    fontSize: '10px',
+    fontWeight: '800',
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.1em',
+  },
+  sidebarNav: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  sidebarBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-secondary)',
+    fontFamily: 'var(--font-display)',
+    fontWeight: '600',
+    fontSize: '13px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    padding: '10px 16px',
+    borderRadius: '10px',
+    transition: 'var(--transition-smooth)',
+    width: '100%',
+  },
+  activeSidebarBtn: {
+    background: 'rgba(99, 102, 241, 0.08)',
+    border: 'none',
+    color: 'var(--accent-primary)',
+    fontFamily: 'var(--font-display)',
+    fontWeight: '700',
+    fontSize: '13px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    padding: '10px 16px',
+    borderRadius: '10px',
+    width: '100%',
+  },
+  contentPanel: {
+    flex: 1,
+    padding: '40px',
+    backgroundColor: '#f8fafc',
+    overflowY: 'auto',
+  },
+  grid2Col: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(12, 1fr)',
-    gap: '24px',
+    gridTemplateColumns: 'repeat(2, 1fr)',
+    gap: '32px',
   },
-  leftCol: {
-    gridColumn: 'span 5',
+  flexColGap: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '24px',
-  },
-  rightCol: {
-    gridColumn: 'span 7',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '24px',
+    gap: '32px',
   },
   tabContent: {
-    flex: 1,
-    maxWidth: '1200px',
-    width: '100%',
-    margin: '0 auto',
-    padding: '32px 40px',
     display: 'flex',
     flexDirection: 'column',
-    gap: '24px',
+    gap: '32px',
   },
   welcomeBanner: {
-    background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(236, 72, 153, 0.01) 100%)',
+    background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.04) 0%, rgba(236, 72, 153, 0.01) 100%)',
     border: '1px solid var(--border-subtle)',
     borderRadius: '20px',
     padding: '24px 32px',
   },
   mapLayout: {
     display: 'flex',
-    flexWrap: 'wrap',
-    gap: '24px',
+    flexDirection: 'column',
+    gap: '32px',
   },
   card: {
     backgroundColor: '#ffffff',
@@ -1335,7 +1955,6 @@ const styles = {
     boxShadow: 'var(--shadow-premium)',
     position: 'relative',
     overflow: 'hidden',
-    transition: 'transform 0.2s ease',
   },
   crazyGradientCard: {
     background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
@@ -1668,5 +2287,36 @@ const styles = {
     margin: '4px 0',
     fontSize: '10px',
     fontFamily: 'monospace',
+  },
+  gridContainer: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+    gap: '20px',
+  },
+  statusCard: {
+    backgroundColor: '#ffffff',
+    border: '1px solid var(--border-subtle)',
+    borderRadius: '16px',
+    padding: '20px',
+    boxShadow: 'var(--shadow-premium)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  statusCardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  statusCardTitle: {
+    fontSize: '14px',
+    color: 'var(--text-primary)',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  statusCardDesc: {
+    fontSize: '12px',
+    color: 'var(--text-secondary)',
+    lineHeight: '1.4',
   },
 }

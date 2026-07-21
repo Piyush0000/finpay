@@ -1,0 +1,10 @@
+{
+  "name": "sdk-test-playground",
+  "version": "1.0.0",
+  "description": "Integration test for @piyush2205/finpay-sdk",
+  "main": "index.js",
+  "dependencies": {
+    "@piyush2205/finpay-sdk": "^1.0.0",
+    "axios": "^1.6.0"
+  }
+}

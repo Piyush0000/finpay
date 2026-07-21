@@ -52,6 +52,9 @@
   "dependencies": {
    
      
+  "@piyush2205/finpay-sdk": "^1.0.0",
+   
+     
   "docker": "^1.0.0",
    
      
