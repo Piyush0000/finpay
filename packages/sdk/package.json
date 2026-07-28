@@ -1,11 +1,52 @@
 {
   "name": "@piyush2205/finpay-sdk",
-  "version": "1.0.0",
-  "description": "Official Node.js SDK for the FinPay distributed payment core.",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Official Node.js SDK for the FinPay distributed payment core with TypeScript support, retry logic, and advanced error handling.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "keywords": [
+    "finpay",
+    "payment",
+    "sdk",
+    "typescript",
+    "api",
+    "wallet",
+    "transfer"
+  ],
   "dependencies": {
     "axios": "^1.6.0"
   },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "axios-mock-adapter": "^1.22.0",
+    "eslint": "^8.0.0",
+    "jest": "^29.5.0",
+    "prettier": "^3.0.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.0"
+  },
   "author": "Piyush Rathore",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piyush2205/finpay-sdk"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "DOCUMENTATION.md"
+  ]
 }
