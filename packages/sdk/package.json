@@ -1,7 +1,7 @@
 {
   "name": "@piyush2205/finpay-sdk",
-  "version": "2.1.0",
-  "description": "Official Node.js SDK for the FinPay distributed payment core with TypeScript support, retry logic, and advanced error handling.",
+  "version": "2.2.0",
+  "description": "Official Node.js SDK for the FinPay distributed payment core with TypeScript support, retry logic, advanced error handling, circuit breaker monitoring, and distributed tracing support.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

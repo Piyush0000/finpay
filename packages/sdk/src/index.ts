@@ -12,6 +12,8 @@ export interface FinPayConfig {
   timeout?: number;
   retryConfig?: RetryConfig;
   enableLogging?: boolean;
+  enableTracing?: boolean;
+  traceParent?: string;
 }
 
 export interface RetryConfig {
@@ -69,6 +71,33 @@ export interface TransactionList {
   total: number;
   page: number;
   limit: number;
+}
+
+export interface CircuitBreakerStatus {
+  status: 'open' | 'closed' | 'halfOpen';
+  stats: {
+    failures: number;
+    successes: number;
+    fallbacks: number;
+    rejects: number;
+    fires: number;
+    timeouts: number;
+  };
+}
+
+export interface CircuitBreakerStatuses {
+  [serviceName: string]: CircuitBreakerStatus;
+}
+
+export interface SystemHealth {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  services: {
+    [serviceName: string]: {
+      status: string;
+      circuitBreaker?: CircuitBreakerStatus;
+    };
+  };
+  timestamp: string;
 }
 
 export type WebhookEventName =
@@ -141,6 +170,20 @@ export class InsufficientFundsError extends FinPayError {
   constructor(message: string = 'Insufficient funds') {
     super(message, 'INSUFFICIENT_FUNDS', 400);
     this.name = 'InsufficientFundsError';
+  }
+}
+
+export class CircuitBreakerOpenError extends FinPayError {
+  constructor(message: string = 'Service temporarily unavailable due to circuit breaker') {
+    super(message, 'CIRCUIT_BREAKER_OPEN', 503);
+    this.name = 'CircuitBreakerOpenError';
+  }
+}
+
+export class ServiceUnavailableError extends FinPayError {
+  constructor(message: string = 'Service unavailable', public serviceName?: string) {
+    super(message, 'SERVICE_UNAVAILABLE', 503);
+    this.name = 'ServiceUnavailableError';
   }
 }
 
@@ -218,10 +261,13 @@ export class FinPayClient extends EventEmitter {
         retryDelay: 1000,
         retryCondition: this.defaultRetryCondition
       },
-      enableLogging: config.enableLogging ?? false
+      enableLogging: config.enableLogging ?? false,
+      enableTracing: config.enableTracing ?? false,
+      traceParent: config.traceParent
     } as FinPayConfig & {
       timeout: number;
       enableLogging: boolean;
+      enableTracing: boolean;
     };
 
     this.retryConfig = {
@@ -235,7 +281,8 @@ export class FinPayClient extends EventEmitter {
       timeout: this.config.timeout,
       headers: {
         'Content-Type': 'application/json',
-        ...(this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {})
+        ...(this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {}),
+        ...(this.config.traceParent ? { 'traceparent': this.config.traceParent } : {})
       }
     });
 
@@ -325,6 +372,12 @@ export class FinPayClient extends EventEmitter {
           const retryAfterMs = parseRetryAfterMs(retryAfterHeader as string | undefined);
           return new RateLimitError(data?.error?.message || 'Rate limit exceeded', retryAfterMs);
         }
+        case 503:
+          if (data?.error?.message?.toLowerCase().includes('circuit breaker') || 
+              data?.error?.message?.toLowerCase().includes('temporarily unavailable')) {
+            return new CircuitBreakerOpenError(data?.error?.message || 'Service temporarily unavailable due to circuit breaker');
+          }
+          return new ServiceUnavailableError(data?.error?.message || 'Service unavailable');
         default:
           return new FinPayError(
             data?.error?.message || 'API request failed',
@@ -490,6 +543,92 @@ export class FinPayClient extends EventEmitter {
   }
 
   // ============================================================================
+  // Circuit Breaker & Health Monitoring Methods
+  // ============================================================================
+
+  /**
+   * Get circuit breaker status for all services
+   */
+  async getCircuitBreakerStatus(): Promise<CircuitBreakerStatuses> {
+    try {
+      const res = await this.client.get('/circuit-breaker/status');
+      return res.data;
+    } catch (error) {
+      // If endpoint doesn't exist, return empty status
+      return {};
+    }
+  }
+
+  /**
+   * Get circuit breaker status for a specific service
+   */
+  async getServiceCircuitBreakerStatus(serviceName: string): Promise<CircuitBreakerStatus | null> {
+    try {
+      const statuses = await this.getCircuitBreakerStatus();
+      return statuses[serviceName] || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Get overall system health status
+   */
+  async getSystemHealth(): Promise<SystemHealth> {
+    try {
+      const healthRes = await this.client.get('/health');
+      const circuitBreakerRes = await this.getCircuitBreakerStatus();
+      
+      // Determine overall health status
+      let overallStatus: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+      const services: SystemHealth['services'] = {};
+      
+      // Add API Gateway health
+      services['api-gateway'] = {
+        status: healthRes.data.status || 'unknown'
+      };
+      
+      // Add circuit breaker status for each service
+      Object.entries(circuitBreakerRes).forEach(([serviceName, status]) => {
+        services[serviceName] = {
+          status: status.status === 'closed' ? 'healthy' : 'degraded',
+          circuitBreaker: status
+        };
+        
+        // Downgrade overall status if any circuit breaker is open
+        if (status.status === 'open') {
+          overallStatus = 'degraded';
+        }
+      });
+      
+      return {
+        status: overallStatus,
+        services,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        services: {},
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Check if a specific service is healthy
+   */
+  async isServiceHealthy(serviceName: string): Promise<boolean> {
+    try {
+      const status = await this.getServiceCircuitBreakerStatus(serviceName);
+      if (!status) return true; // Assume healthy if no status available
+      return status.status === 'closed';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // ============================================================================
   // Static Methods
   // ============================================================================
 
@@ -555,4 +694,6 @@ if (typeof module !== 'undefined') {
   module.exports.NetworkError = NetworkError;
   module.exports.RateLimitError = RateLimitError;
   module.exports.InsufficientFundsError = InsufficientFundsError;
+  module.exports.CircuitBreakerOpenError = CircuitBreakerOpenError;
+  module.exports.ServiceUnavailableError = ServiceUnavailableError;
 }

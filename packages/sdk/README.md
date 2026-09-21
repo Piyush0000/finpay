@@ -1,8 +1,16 @@
-# FinPay Node.js SDK v2.0.1
+# FinPay Node.js SDK v2.2.0
 
-Official Node.js client library wrapper for the **FinPay** distributed payments core. Now with TypeScript support, automatic retry logic, advanced error handling, and real-time event streaming.
+Official Node.js client library wrapper for the **FinPay** distributed payments core. Now with TypeScript support, automatic retry logic, advanced error handling, circuit breaker monitoring, and distributed tracing support.
 
 ---
+
+## What's New in v2.2
+
+- **Circuit Breaker Monitoring** - Real-time circuit breaker status and health monitoring
+- **Distributed Tracing Support** - Trace context propagation for end-to-end request tracking
+- **New Error Types** - CircuitBreakerOpenError and ServiceUnavailableError
+- **System Health Checks** - Overall system health and per-service status monitoring
+- **Enhanced Configuration** - Tracing options and trace parent propagation
 
 ## What's New in v2.0
 
@@ -37,6 +45,7 @@ const finpay = new FinPayClient({
   apiBase: 'http://localhost:3000/api',
   token: 'YOUR_JWT_ACCESS_TOKEN', // Obtained via auth/login
   enableLogging: true, // Enable request/response logging
+  enableTracing: true, // Enable distributed tracing support
   retryConfig: {
     maxRetries: 3,
     retryDelay: 1000
@@ -143,7 +152,7 @@ finpay.on('payment.completed', (data) => {
 
 ## Advanced Error Handling
 
-v2.0 provides specific error types for better error handling:
+v2.2 provides specific error types for better error handling:
 
 ```javascript
 const {
@@ -152,7 +161,9 @@ const {
   ValidationError,
   NetworkError,
   RateLimitError,
-  InsufficientFundsError
+  InsufficientFundsError,
+  CircuitBreakerOpenError,
+  ServiceUnavailableError
 } = require('@piyush2205/finpay-sdk');
 
 try {
@@ -167,6 +178,12 @@ try {
   } else if (err instanceof InsufficientFundsError) {
     // Handle insufficient funds
     console.error('Not enough balance');
+  } else if (err instanceof CircuitBreakerOpenError) {
+    // Handle circuit breaker open (503)
+    console.error('Service temporarily unavailable:', err.message);
+  } else if (err instanceof ServiceUnavailableError) {
+    // Handle service unavailable (503)
+    console.error('Service unavailable:', err.message);
   } else if (err instanceof RateLimitError) {
     // Handle rate limiting (429)
     console.error('Too many requests');
@@ -192,6 +209,8 @@ try {
 | `token` | string | Yes | - | JWT access token |
 | `timeout` | number | No | `30000` | Request timeout in milliseconds |
 | `enableLogging` | boolean | No | `false` | Enable request/response logging |
+| `enableTracing` | boolean | No | `false` | Enable distributed tracing support |
+| `traceParent` | string | No | - | Trace parent ID for context propagation |
 | `retryConfig.maxRetries` | number | No | `3` | Maximum retry attempts |
 | `retryConfig.retryDelay` | number | No | `1000` | Initial retry delay in ms |
 
@@ -215,11 +234,80 @@ Retrieves details of a specific transaction.
 #### `listTransactions(page?, limit?): Promise<TransactionList>`
 Lists paginated transaction history.
 
+#### `getCircuitBreakerStatus(): Promise<CircuitBreakerStatuses>`
+Get circuit breaker status for all services.
+
+#### `getServiceCircuitBreakerStatus(serviceName): Promise<CircuitBreakerStatus>`
+Get circuit breaker status for a specific service.
+
+#### `getSystemHealth(): Promise<SystemHealth>`
+Get overall system health status including all services.
+
+#### `isServiceHealthy(serviceName): Promise<boolean>`
+Check if a specific service is healthy.
+
 #### `verifyWebhookSignature(payload, signature, secret): boolean`
 Static method to verify webhook signature authenticity.
 
 #### `handleWebhook(payload, signature, secret, client?): boolean`
 Static method to verify and emit webhook events on a client instance.
+
+---
+
+## Circuit Breaker & Health Monitoring
+
+The SDK v2.2 includes built-in support for monitoring circuit breakers and system health.
+
+### Check Circuit Breaker Status
+```javascript
+// Get all circuit breaker statuses
+const statuses = await finpay.getCircuitBreakerStatus();
+console.log(statuses);
+// {
+//   auth: { status: 'closed', stats: { failures: 0, successes: 10, ... } },
+//   wallet: { status: 'open', stats: { failures: 8, successes: 2, ... } },
+//   ...
+// }
+
+// Get specific service status
+const walletStatus = await finpay.getServiceCircuitBreakerStatus('wallet');
+console.log(walletStatus);
+// { status: 'open', stats: { failures: 8, successes: 2, fallbacks: 5, ... } }
+```
+
+### System Health Monitoring
+```javascript
+// Get overall system health
+const health = await finpay.getSystemHealth();
+console.log(health);
+// {
+//   status: 'degraded',
+//   services: {
+//     'api-gateway': { status: 'ok' },
+//     'wallet': { status: 'degraded', circuitBreaker: { status: 'open', ... } },
+//     'auth': { status: 'healthy', circuitBreaker: { status: 'closed', ... } }
+//   },
+//   timestamp: '2024-01-15T10:30:00.000Z'
+// }
+
+// Check if specific service is healthy
+const isWalletHealthy = await finpay.isServiceHealthy('wallet');
+console.log('Wallet healthy:', isWalletHealthy); // false if circuit breaker is open
+```
+
+### Distributed Tracing
+```javascript
+// Enable tracing and propagate trace context
+const finpay = new FinPayClient({
+  apiBase: 'http://localhost:3000/api',
+  token: 'YOUR_JWT_ACCESS_TOKEN',
+  enableTracing: true,
+  traceParent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' // W3C trace context
+});
+
+// The SDK will automatically include trace headers in all requests
+// for end-to-end distributed tracing across microservices
+```
 
 ---
 
