@@ -17,7 +17,11 @@ export interface FinPayConfig {
 export interface RetryConfig {
   maxRetries?: number;
   retryDelay?: number;
-  retryCondition?: (error: AxiosError) => boolean;
+  retryCondition?: (error: FinPayError) => boolean;
+}
+
+export interface RequestOptions {
+  signal?: AbortSignal;
 }
 
 export interface Wallet {
@@ -31,12 +35,14 @@ export interface TransferParams {
   receiverEmail: string;
   amount: number;
   currency?: string;
-  idempotencyKey: string;
+  /** Auto-generated via crypto.randomUUID() if omitted */
+  idempotencyKey?: string;
 }
 
 export interface TransferOptions {
   simulateDelay?: number;
   simulateError?: string;
+  signal?: AbortSignal;
 }
 
 export interface TransferResponse {
@@ -65,8 +71,15 @@ export interface TransactionList {
   limit: number;
 }
 
+export type WebhookEventName =
+  | 'payment.completed'
+  | 'payment.failed'
+  | 'payment.pending'
+  | 'transfer.initiated'
+  | 'transfer.rolled_back';
+
 export interface WebhookPayload {
-  event: string;
+  event: WebhookEventName;
   data: {
     transactionId: string;
     senderEmail: string;
@@ -118,7 +131,7 @@ export class NetworkError extends FinPayError {
 }
 
 export class RateLimitError extends FinPayError {
-  constructor(message: string = 'Rate limit exceeded') {
+  constructor(message: string = 'Rate limit exceeded', public retryAfterMs?: number) {
     super(message, 'RATE_LIMIT_ERROR', 429);
     this.name = 'RateLimitError';
   }
@@ -149,7 +162,7 @@ class Validator {
     return typeof key === 'string' && key.length > 0;
   }
 
-  static validateTransferParams(params: TransferParams): void {
+  static validateTransferParams(params: TransferParams & { idempotencyKey: string }): void {
     if (!this.validateEmail(params.receiverEmail)) {
       throw new ValidationError('Invalid receiver email format', { field: 'receiverEmail' });
     }
@@ -160,6 +173,21 @@ class Validator {
       throw new ValidationError('Idempotency key is required', { field: 'idempotencyKey' });
     }
   }
+}
+
+/**
+ * Retry-After can be seconds ("120") or an HTTP date. Returns milliseconds to wait, or undefined if unparseable.
+ */
+function parseRetryAfterMs(headerValue: string | undefined): number | undefined {
+  if (!headerValue) return undefined;
+
+  const seconds = Number(headerValue);
+  if (!Number.isNaN(seconds)) return seconds * 1000;
+
+  const dateMs = Date.parse(headerValue);
+  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+
+  return undefined;
 }
 
 // ============================================================================
@@ -175,12 +203,12 @@ export class FinPayClient extends EventEmitter {
   private retryConfig: {
     maxRetries: number;
     retryDelay: number;
-    retryCondition: (error: AxiosError) => boolean;
+    retryCondition: (error: FinPayError) => boolean;
   };
 
   constructor(config: FinPayConfig) {
     super();
-    
+
     this.config = {
       apiBase: config.apiBase || 'http://localhost:3000/api',
       token: config.token,
@@ -214,10 +242,33 @@ export class FinPayClient extends EventEmitter {
     this.setupInterceptors();
   }
 
-  private defaultRetryCondition(error: AxiosError): boolean {
-    if (!error.response) return true; // Network errors
-    const status = error.response.status;
-    return status === 429 || status >= 500; // Retry on rate limits and server errors
+  /**
+   * Build a client from FINPAY_TOKEN / FINPAY_API_BASE / FINPAY_TIMEOUT / FINPAY_DEBUG env vars.
+   */
+  static fromEnv(overrides: Partial<FinPayConfig> = {}): FinPayClient {
+    const token = overrides.token ?? process.env.FINPAY_TOKEN;
+    if (!token) {
+      throw new ValidationError('FINPAY_TOKEN environment variable is required', { field: 'token' });
+    }
+
+    return new FinPayClient({
+      apiBase: overrides.apiBase ?? process.env.FINPAY_API_BASE,
+      token,
+      timeout: overrides.timeout ?? (process.env.FINPAY_TIMEOUT ? Number(process.env.FINPAY_TIMEOUT) : undefined),
+      retryConfig: overrides.retryConfig,
+      enableLogging: overrides.enableLogging ?? process.env.FINPAY_DEBUG === 'true'
+    });
+  }
+
+  /**
+   * Retries on network failures and 429/5xx responses only — not on 4xx client errors
+   * like auth or validation failures, which will never succeed on replay.
+   */
+  private defaultRetryCondition(error: FinPayError): boolean {
+    if (error instanceof NetworkError) return true;
+    const status = error.statusCode;
+    if (status === undefined) return true;
+    return status === 429 || status >= 500;
   }
 
   private setupInterceptors(): void {
@@ -267,8 +318,13 @@ export class FinPayClient extends EventEmitter {
             return new InsufficientFundsError(data.error.message);
           }
           return new ValidationError(data?.error?.message || 'Validation failed', data);
-        case 429:
-          return new RateLimitError(data?.error?.message || 'Rate limit exceeded');
+        case 429: {
+          const headers = error.response.headers as any;
+          const retryAfterHeader =
+            typeof headers?.get === 'function' ? headers.get('retry-after') : headers?.['retry-after'];
+          const retryAfterMs = parseRetryAfterMs(retryAfterHeader as string | undefined);
+          return new RateLimitError(data?.error?.message || 'Rate limit exceeded', retryAfterMs);
+        }
         default:
           return new FinPayError(
             data?.error?.message || 'API request failed',
@@ -286,27 +342,31 @@ export class FinPayClient extends EventEmitter {
 
   private async retryRequest<T>(requestFn: () => Promise<T>): Promise<T> {
     let lastError: FinPayError;
-    
+
     for (let attempt = 0; attempt <= this.retryConfig.maxRetries; attempt++) {
       try {
         return await requestFn();
       } catch (error) {
         lastError = error as FinPayError;
-        
+
         // Check if we should retry
-        if (attempt === this.retryConfig.maxRetries || !this.retryConfig.retryCondition(error as AxiosError)) {
+        if (attempt === this.retryConfig.maxRetries || !this.retryConfig.retryCondition(lastError)) {
           throw lastError;
         }
 
-        // Exponential backoff
-        const delay = this.retryConfig.retryDelay * Math.pow(2, attempt);
+        // Honor Retry-After on 429s, otherwise exponential backoff
+        const delay =
+          lastError instanceof RateLimitError && lastError.retryAfterMs !== undefined
+            ? lastError.retryAfterMs
+            : this.retryConfig.retryDelay * Math.pow(2, attempt);
+
         if (this.config.enableLogging) {
           console.log(`[FinPay SDK] Retry attempt ${attempt + 1}/${this.retryConfig.maxRetries} after ${delay}ms`);
         }
         await this.sleep(delay);
       }
     }
-    
+
     throw lastError!;
   }
 
@@ -321,9 +381,9 @@ export class FinPayClient extends EventEmitter {
   /**
    * Retrieve active wallet ledger details
    */
-  async getWallet(): Promise<Wallet> {
+  async getWallet(options: RequestOptions = {}): Promise<Wallet> {
     return this.retryRequest(async () => {
-      const res = await this.client.get('/wallets/me');
+      const res = await this.client.get('/wallets/me', { signal: options.signal });
       return res.data;
     });
   }
@@ -331,9 +391,9 @@ export class FinPayClient extends EventEmitter {
   /**
    * Register a new active digital wallet
    */
-  async createWallet(): Promise<Wallet> {
+  async createWallet(options: RequestOptions = {}): Promise<Wallet> {
     return this.retryRequest(async () => {
-      const res = await this.client.post('/wallets');
+      const res = await this.client.post('/wallets', undefined, { signal: options.signal });
       return res.data;
     });
   }
@@ -341,23 +401,22 @@ export class FinPayClient extends EventEmitter {
   /**
    * Add mock funding credits to the wallet
    */
-  async fundWallet(): Promise<Wallet> {
+  async fundWallet(options: RequestOptions = {}): Promise<Wallet> {
     return this.retryRequest(async () => {
-      const res = await this.client.post('/wallets/me/fund');
+      const res = await this.client.post('/wallets/me/fund', undefined, { signal: options.signal });
       return res.data;
     });
   }
 
   /**
-   * Initiate an asynchronous instant transfer via the Saga core
+   * Initiate an asynchronous instant transfer via the Saga core.
+   * If `idempotencyKey` is omitted, one is generated automatically.
    */
   async transfer(params: TransferParams, options: TransferOptions = {}): Promise<TransferResponse> {
-    Validator.validateTransferParams(params);
+    const idempotencyKey = params.idempotencyKey === undefined ? crypto.randomUUID() : params.idempotencyKey;
+    Validator.validateTransferParams({ ...params, idempotencyKey });
 
-    const headers: Record<string, string> = {};
-    if (params.idempotencyKey) {
-      headers['Idempotency-Key'] = params.idempotencyKey;
-    }
+    const headers: Record<string, string> = { 'Idempotency-Key': idempotencyKey };
     if (options.simulateDelay) {
       headers['X-Simulate-Delay'] = options.simulateDelay.toString();
     }
@@ -370,11 +429,11 @@ export class FinPayClient extends EventEmitter {
         receiverEmail: params.receiverEmail,
         amount: params.amount,
         currency: params.currency || 'INR'
-      }, { headers });
+      }, { headers, signal: options.signal });
 
       // Emit event for successful transfer initiation
       this.emit('transfer.initiated', res.data);
-      
+
       return res.data;
     });
   }
@@ -382,13 +441,13 @@ export class FinPayClient extends EventEmitter {
   /**
    * Retrieve transfer pipeline status
    */
-  async getTransaction(transactionId: string): Promise<Transaction> {
+  async getTransaction(transactionId: string, options: RequestOptions = {}): Promise<Transaction> {
     if (!transactionId || typeof transactionId !== 'string') {
       throw new ValidationError('Invalid transaction ID', { field: 'transactionId' });
     }
 
     return this.retryRequest(async () => {
-      const res = await this.client.get(`/transfers/${transactionId}`);
+      const res = await this.client.get(`/transfers/${transactionId}`, { signal: options.signal });
       return res.data;
     });
   }
@@ -396,7 +455,7 @@ export class FinPayClient extends EventEmitter {
   /**
    * List recent client ledger transaction history
    */
-  async listTransactions(page: number = 1, limit: number = 20): Promise<TransactionList> {
+  async listTransactions(page: number = 1, limit: number = 20, options: RequestOptions = {}): Promise<TransactionList> {
     if (!Number.isInteger(page) || page < 1) {
       throw new ValidationError('Page must be a positive integer', { field: 'page' });
     }
@@ -405,9 +464,29 @@ export class FinPayClient extends EventEmitter {
     }
 
     return this.retryRequest(async () => {
-      const res = await this.client.get(`/transfers?page=${page}&limit=${limit}`);
+      const res = await this.client.get(`/transfers?page=${page}&limit=${limit}`, { signal: options.signal });
       return res.data;
     });
+  }
+
+  /**
+   * Walk the full transaction history, transparently paging under the hood.
+   */
+  async *iterateTransactions(pageSize: number = 20): AsyncGenerator<Transaction, void, void> {
+    let page = 1;
+
+    while (true) {
+      const { transactions, total } = await this.listTransactions(page, pageSize);
+
+      for (const transaction of transactions) {
+        yield transaction;
+      }
+
+      if (transactions.length === 0 || page * pageSize >= total) {
+        break;
+      }
+      page++;
+    }
   }
 
   // ============================================================================
@@ -415,7 +494,8 @@ export class FinPayClient extends EventEmitter {
   // ============================================================================
 
   /**
-   * Verify FinPay webhook signature headers to validate origin authenticity
+   * Verify FinPay webhook signature headers to validate origin authenticity.
+   * Uses a constant-time comparison to avoid leaking the secret via timing.
    */
   static verifyWebhookSignature(
     payload: WebhookPayload | string,
@@ -423,15 +503,22 @@ export class FinPayClient extends EventEmitter {
     secret: string
   ): boolean {
     if (!payload || !signature || !secret) return false;
-    
+
     const stringPayload = typeof payload === 'string' ? payload : JSON.stringify(payload);
     const computed = crypto.createHmac('sha256', secret).update(stringPayload).digest('hex');
-    
-    return computed === signature;
+
+    const computedBuffer = Buffer.from(computed, 'hex');
+    const signatureBuffer = Buffer.from(signature, 'hex');
+
+    if (computedBuffer.length !== signatureBuffer.length) return false;
+
+    return crypto.timingSafeEqual(computedBuffer, signatureBuffer);
   }
 
   /**
-   * Parse webhook event and emit on a client instance if provided
+   * Parse webhook event and emit on a client instance if provided.
+   * Events are emitted as `webhook:<event>` so untrusted payloads can never
+   * trigger EventEmitter's special 'error' event and crash the process.
    */
   static handleWebhook(
     payload: WebhookPayload,
@@ -440,11 +527,11 @@ export class FinPayClient extends EventEmitter {
     client?: FinPayClient
   ): boolean {
     const isValid = this.verifyWebhookSignature(payload, signature, secret);
-    
+
     if (isValid && client) {
-      client.emit(payload.event, payload.data);
+      client.emit(`webhook:${payload.event}`, payload.data);
     }
-    
+
     return isValid;
   }
 }
@@ -454,3 +541,18 @@ export class FinPayClient extends EventEmitter {
 // ============================================================================
 
 export default FinPayClient;
+
+// Allow plain CommonJS consumers to do `const FinPayClient = require('@piyush2205/finpay-sdk')`
+// and get the class directly, while TS/ESM consumers keep using default or named imports.
+/* eslint-disable @typescript-eslint/no-var-requires */
+if (typeof module !== 'undefined') {
+  module.exports = FinPayClient;
+  module.exports.default = FinPayClient;
+  module.exports.FinPayClient = FinPayClient;
+  module.exports.FinPayError = FinPayError;
+  module.exports.AuthenticationError = AuthenticationError;
+  module.exports.ValidationError = ValidationError;
+  module.exports.NetworkError = NetworkError;
+  module.exports.RateLimitError = RateLimitError;
+  module.exports.InsufficientFundsError = InsufficientFundsError;
+}

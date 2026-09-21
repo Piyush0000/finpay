@@ -3,8 +3,14 @@
 require('dotenv').config()
 const express = require('express')
 const mongoose = require('mongoose')
-const { requestId, errorHandler, getRedisClient, createLogger } = require('@finpay/shared')
+const { requestId, errorHandler, getRedisClient, createLogger, initializeTracing } = require('@finpay/shared')
 const AnalyticsAggregate = require('./models/AnalyticsAggregate')
+
+// Initialize OpenTelemetry tracing
+initializeTracing({
+  serviceName: 'analytics-service',
+  serviceVersion: '1.0.0'
+})
 
 const logger = createLogger('analytics-service')
 const port = process.env.ANALYTICS_SERVICE_PORT || 3005

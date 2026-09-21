@@ -2,11 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-08-22
+
+### Fixed
+- **CommonJS interop** - `require('@piyush2205/finpay-sdk')` now returns the `FinPayClient` class directly instead of the module namespace object, fixing `TypeError: FinPayClient is not a constructor` for plain CJS consumers (e.g. `payment-link-service`)
+- **Retry logic honored client errors incorrectly** - retries no longer fire on 4xx errors (auth/validation failures) that can never succeed on replay; only network errors and 429/5xx are retried
+- **Webhook signature comparison** - `verifyWebhookSignature` now uses `crypto.timingSafeEqual` instead of `===`, closing a timing side-channel
+- **Webhook event crash risk** - `handleWebhook` now emits `webhook:<event>` instead of the raw event name, so an untrusted payload can no longer trigger EventEmitter's special `'error'` event and crash the process
+
+### Added
+- **Retry-After support** - 429 responses honor the `Retry-After` header instead of blind exponential backoff
+- **Auto-generated idempotency keys** - `idempotencyKey` is now optional on `transfer()`, defaulting to `crypto.randomUUID()`
+- **Request cancellation** - all methods accept an `AbortSignal` via an options parameter
+- **`iterateTransactions()`** - async generator that transparently pages through full transaction history
+- **`FinPayClient.fromEnv()`** - builds a client from `FINPAY_TOKEN` / `FINPAY_API_BASE` / `FINPAY_TIMEOUT` / `FINPAY_DEBUG`
+- **Typed webhook event names** - `WebhookPayload.event` is now a `WebhookEventName` union instead of `string`
+
+## [2.0.1] - 2026-07-29
+
+### Patch Release
+- Updated repository URL to point to main project structure
+- Removed emojis from documentation for cleaner professional appearance
+- Fixed package.json repository URL format
+
 ## [2.0.0] - 2026-07-29
 
-### 🎉 Major Release - Complete Rewrite with TypeScript
+### Major Release - Complete Rewrite with TypeScript
 
-### ✨ Added
+### Added
 - **Full TypeScript Support** - Complete type definitions and TypeScript source code
 - **Automatic Retry Logic** - Exponential backoff retry mechanism for failed requests
 - **Custom Error Classes** - Specific error types (AuthenticationError, ValidationError, NetworkError, RateLimitError, InsufficientFundsError)
@@ -19,42 +42,42 @@ All notable changes to this project will be documented in this file.
 - **Webhook Event Handler** - Static method to verify and emit webhook events
 - **Configuration Options** - Advanced configuration including timeout, retry settings, and logging toggle
 
-### 🔄 Changed
+### Changed
 - **Source Code** - Migrated from JavaScript to TypeScript
 - **Error Handling** - Improved error messages with proper error types and stack traces
 - **API Structure** - Better organized code with clear separation of concerns
 - **Package Configuration** - Updated package.json with build scripts and development dependencies
 
-### 🛠️ Developer Experience
+### Developer Experience
 - **Type Safety** - Full IDE support with autocomplete and type checking
 - **Better Debugging** - Optional request/response logging for development
 - **Testing** - Comprehensive test suite with coverage reporting
 - **Code Quality** - ESLint and Prettier for consistent code style
 - **Build Process** - Automated TypeScript compilation for distribution
 
-### 📝 Documentation
+### Documentation
 - **Enhanced README** - Detailed usage examples and API reference
 - **Changelog** - This file to track all changes
 - **Type Definitions** - Generated `.d.ts` files for TypeScript users
 
-### 🧪 Testing
+### Testing
 - **Unit Tests** - Comprehensive test coverage for all methods
 - **Integration Tests** - Mock API responses for testing
 - **Error Scenarios** - Tests for various error conditions
 - **Validation Tests** - Tests for input validation logic
 
-### 📦 Build & Distribution
+### Build & Distribution
 - **TypeScript Compilation** - Automated build process
 - **Type Definitions** - Included in distribution for TypeScript users
 - **Source Maps** - Generated for debugging
 - **NPM Scripts** - Convenient commands for build, test, and lint
 
-### 🚀 Performance
+### Performance
 - **Retry Logic** - Automatic retry with exponential backoff improves reliability
 - **Connection Reuse** - Axios instance management for better performance
 - **Efficient Validation** - Early validation prevents unnecessary API calls
 
-### 🔒 Security
+### Security
 - **Type Safety** - TypeScript prevents many runtime errors
 - **Input Validation** - Protects against invalid data
 - **Error Handling** - Proper error classification prevents information leakage
@@ -63,7 +86,7 @@ All notable changes to this project will be documented in this file.
 
 ## [1.0.0] - 2026-07-19
 
-### ✨ Initial Release
+### Initial Release
 - Basic wallet operations (get, create, fund)
 - Transfer functionality with idempotency
 - Transaction history and status checking

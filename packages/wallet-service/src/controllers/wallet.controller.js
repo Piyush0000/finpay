@@ -1,4 +1,5 @@
-const walletService = require('../services/wallet.service')
+const WalletService = require('../services/wallet.service')
+const walletService = new WalletService()
 
 const walletController = {
   async createWallet(req, res, next) {

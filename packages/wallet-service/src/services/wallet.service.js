@@ -1,42 +1,70 @@
 const Wallet = require('../models/Wallet')
 const LedgerEntry = require('../models/LedgerEntry')
-const { NotFoundError, ConflictError, ValidationError, acquireLock, releaseLock, createLogger } = require('@finpay/shared')
+const { NotFoundError, ConflictError, ValidationError, acquireLock, releaseLock, createLogger, createCircuitBreaker } = require('@finpay/shared')
 
 const logger = createLogger('wallet-service:wallet.service')
 
+// Static circuit breakers for monitoring
+let debitCircuitBreaker = null;
+let creditCircuitBreaker = null;
+
 class WalletService {
-  async createWallet(userId) {
-    const existing = await Wallet.findOne({ userId })
-    if (existing) throw new ConflictError('Wallet already exists for this user')
+  constructor() {
+    // Create circuit breakers for critical operations if not already created
+    if (!debitCircuitBreaker) {
+      debitCircuitBreaker = createCircuitBreaker(
+        this._performDebit.bind(this),
+        {
+          timeout: 5000,
+          errorThresholdPercentage: 30,
+          resetTimeout: 20000
+        }
+      );
 
-    const wallet = await Wallet.create({ userId })
-    return wallet
+      debitCircuitBreaker.fallback(() => {
+        throw new ValidationError('Wallet debit operation temporarily unavailable due to high load. Please retry later.');
+      });
+    }
+
+    if (!creditCircuitBreaker) {
+      creditCircuitBreaker = createCircuitBreaker(
+        this._performCredit.bind(this),
+        {
+          timeout: 5000,
+          errorThresholdPercentage: 30,
+          resetTimeout: 20000
+        }
+      );
+
+      creditCircuitBreaker.fallback(() => {
+        throw new ValidationError('Wallet credit operation temporarily unavailable due to high load. Please retry later.');
+      });
+    }
+
+    this.debitCircuitBreaker = debitCircuitBreaker;
+    this.creditCircuitBreaker = creditCircuitBreaker;
   }
 
-  async getWalletByUserId(userId) {
-    const wallet = await Wallet.findOne({ userId })
-    if (!wallet) throw new NotFoundError('Wallet not found')
-    return wallet
+  static getCircuitBreakerStatus() {
+    return {
+      debit: {
+        status: debitCircuitBreaker ? (debitCircuitBreaker.opened ? 'open' : (debitCircuitBreaker.halfOpen ? 'halfOpen' : 'closed')) : 'not_initialized',
+        stats: debitCircuitBreaker ? debitCircuitBreaker.stats : null
+      },
+      credit: {
+        status: creditCircuitBreaker ? (creditCircuitBreaker.opened ? 'open' : (creditCircuitBreaker.halfOpen ? 'halfOpen' : 'closed')) : 'not_initialized',
+        stats: creditCircuitBreaker ? creditCircuitBreaker.stats : null
+      }
+    };
   }
 
-  async getWalletById(walletId) {
-    const wallet = await Wallet.findById(walletId)
-    if (!wallet) throw new NotFoundError('Wallet not found')
-    return wallet
-  }
-
-  /**
-   * Debit a wallet with a distributed lock.
-   * Lock → re-read balance (definitive check) → write → release.
-   */
-  async debit(walletId, amount, transactionId, description = 'Debit') {
+  async _performDebit(walletId, amount, transactionId, description) {
     const lockToken = await acquireLock(`wallet:${walletId}`)
     if (!lockToken) {
       throw new ValidationError('Wallet is busy — another operation is in progress. Please retry.')
     }
 
     try {
-      // Re-read balance under the lock (authoritative check)
       const wallet = await Wallet.findById(walletId)
       if (!wallet) throw new NotFoundError('Wallet not found')
 
@@ -68,16 +96,11 @@ class WalletService {
       logger.info({ walletId: walletId.toString(), balanceBefore, balanceAfter, amount }, 'Debit applied')
       return wallet
     } finally {
-      // Always release the lock — even if an error was thrown
       await releaseLock(`wallet:${walletId}`, lockToken)
     }
   }
 
-  /**
-   * Credit a wallet with a distributed lock.
-   * Lock → re-read wallet → write → release.
-   */
-  async credit(walletId, amount, transactionId, description = 'Credit') {
+  async _performCredit(walletId, amount, transactionId, description) {
     const lockToken = await acquireLock(`wallet:${walletId}`)
     if (!lockToken) {
       throw new ValidationError('Wallet is busy — another operation is in progress. Please retry.')
@@ -114,6 +137,41 @@ class WalletService {
       await releaseLock(`wallet:${walletId}`, lockToken)
     }
   }
+  async createWallet(userId) {
+    const existing = await Wallet.findOne({ userId })
+    if (existing) throw new ConflictError('Wallet already exists for this user')
+
+    const wallet = await Wallet.create({ userId })
+    return wallet
+  }
+
+  async getWalletByUserId(userId) {
+    const wallet = await Wallet.findOne({ userId })
+    if (!wallet) throw new NotFoundError('Wallet not found')
+    return wallet
+  }
+
+  async getWalletById(walletId) {
+    const wallet = await Wallet.findById(walletId)
+    if (!wallet) throw new NotFoundError('Wallet not found')
+    return wallet
+  }
+
+  /**
+   * Debit a wallet with circuit breaker protection and distributed lock.
+   * Circuit Breaker → Lock → re-read balance (definitive check) → write → release.
+   */
+  async debit(walletId, amount, transactionId, description = 'Debit') {
+    return this.debitCircuitBreaker.fire(walletId, amount, transactionId, description)
+  }
+
+  /**
+   * Credit a wallet with circuit breaker protection and distributed lock.
+   * Circuit Breaker → Lock → re-read wallet → write → release.
+   */
+  async credit(walletId, amount, transactionId, description = 'Credit') {
+    return this.creditCircuitBreaker.fire(walletId, amount, transactionId, description)
+  }
 }
 
-module.exports = new WalletService()
+module.exports = WalletService

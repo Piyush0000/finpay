@@ -8,4 +8,9 @@ module.exports = {
   getBullMQConnection: require('./redis/client').getBullMQConnection,
   acquireLock: require('./redis/lock').acquireLock,
   releaseLock: require('./redis/lock').releaseLock,
+  createCircuitBreaker: require('./circuitBreaker').createCircuitBreaker,
+  createHttpCircuitBreaker: require('./circuitBreaker').createHttpCircuitBreaker,
+  initializeTracing: require('./tracing').initializeTracing,
+  getTraceContext: require('./tracing').getTraceContext,
+  shutdownTracing: require('./tracing').shutdownTracing,
 }

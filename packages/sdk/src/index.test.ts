@@ -1,4 +1,4 @@
-import { FinPayClient, ValidationError, AuthenticationError, NetworkError } from './index';
+import { FinPayClient, ValidationError, AuthenticationError, NetworkError, WebhookPayload } from './index';
 import MockAdapter from 'axios-mock-adapter';
 import crypto from 'crypto';
 
@@ -244,7 +244,7 @@ describe('FinPayClient', () => {
 
   describe('verifyWebhookSignature', () => {
     it('should verify valid webhook signature', () => {
-      const payload = {
+      const payload: WebhookPayload = {
         event: 'payment.completed',
         data: {
           transactionId: 't_123',
@@ -268,7 +268,7 @@ describe('FinPayClient', () => {
     });
 
     it('should reject invalid webhook signature', () => {
-      const payload = {
+      const payload: WebhookPayload = {
         event: 'payment.completed',
         data: {
           transactionId: 't_123',
@@ -405,6 +405,208 @@ describe('FinPayClient', () => {
       ).rejects.toThrow();
       
       retryMock.restore();
+    });
+
+    it('should NOT retry on 401 auth errors (retries can only ever repeat the failure)', async () => {
+      const retryClient = new FinPayClient({
+        apiBase: 'http://localhost:3000/api',
+        token: 'test-jwt-token',
+        retryConfig: {
+          maxRetries: 3,
+          retryDelay: 10
+        }
+      });
+
+      const axiosInstance = (retryClient as any).client;
+      const retryMock = new MockAdapter(axiosInstance);
+
+      let attemptCount = 0;
+      retryMock.onGet('/wallets/me').reply(() => {
+        attemptCount++;
+        return [401, { error: { message: 'bad token' } }];
+      });
+
+      await expect(retryClient.getWallet()).rejects.toThrow(AuthenticationError);
+      expect(attemptCount).toBe(1);
+
+      retryMock.restore();
+    });
+
+    it('should NOT retry on 400 validation errors', async () => {
+      const retryClient = new FinPayClient({
+        apiBase: 'http://localhost:3000/api',
+        token: 'test-jwt-token',
+        retryConfig: {
+          maxRetries: 3,
+          retryDelay: 10
+        }
+      });
+
+      const axiosInstance = (retryClient as any).client;
+      const retryMock = new MockAdapter(axiosInstance);
+
+      let attemptCount = 0;
+      retryMock.onGet('/wallets/me').reply(() => {
+        attemptCount++;
+        return [400, { error: { message: 'bad request' } }];
+      });
+
+      await expect(retryClient.getWallet()).rejects.toThrow(ValidationError);
+      expect(attemptCount).toBe(1);
+
+      retryMock.restore();
+    });
+
+    it('should honor Retry-After header on 429 responses instead of exponential backoff', async () => {
+      const retryClient = new FinPayClient({
+        apiBase: 'http://localhost:3000/api',
+        token: 'test-jwt-token',
+        retryConfig: {
+          maxRetries: 1,
+          retryDelay: 5000 // deliberately large so the test would time out if Retry-After is ignored
+        }
+      });
+
+      const axiosInstance = (retryClient as any).client;
+      const retryMock = new MockAdapter(axiosInstance);
+
+      let attemptCount = 0;
+      retryMock.onGet('/wallets/me').reply(() => {
+        attemptCount++;
+        if (attemptCount === 1) {
+          return [429, { error: { message: 'slow down' } }, { 'Retry-After': '0' }];
+        }
+        return [200, { walletId: 'w_1', balance: 0, currency: 'INR', status: 'active' }];
+      });
+
+      const wallet = await retryClient.getWallet();
+      expect(wallet.walletId).toBe('w_1');
+      expect(attemptCount).toBe(2);
+
+      retryMock.restore();
+    }, 1000);
+  });
+
+  describe('Idempotency key auto-generation', () => {
+    it('generates an idempotency key when none is provided', async () => {
+      mock.onPost('/transfers').reply(200, {
+        transactionId: 't_789',
+        status: 'PENDING',
+        amount: 15000,
+        currency: 'INR'
+      });
+
+      await client.transfer({
+        receiverEmail: 'test@example.com',
+        amount: 15000
+      });
+
+      const request = mock.history.post[0];
+      expect(request.headers?.['Idempotency-Key']).toBeTruthy();
+      expect(typeof request.headers?.['Idempotency-Key']).toBe('string');
+    });
+
+    it('still rejects an explicitly empty idempotency key', async () => {
+      await expect(
+        client.transfer({
+          receiverEmail: 'test@example.com',
+          amount: 15000,
+          idempotencyKey: ''
+        })
+      ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  describe('iterateTransactions', () => {
+    it('pages through all transactions transparently', async () => {
+      const txPage = (id: string) => ({
+        _id: id,
+        senderId: 'user1',
+        receiverId: 'user2',
+        amount: 1000,
+        currency: 'INR',
+        status: 'COMPLETED',
+        idempotencyKey: id,
+        createdAt: '2026-07-19T18:15:24.120Z',
+        updatedAt: '2026-07-19T18:15:24.950Z'
+      });
+
+      mock.onGet('/transfers?page=1&limit=2').reply(200, {
+        transactions: [txPage('t_1'), txPage('t_2')],
+        total: 3,
+        page: 1,
+        limit: 2
+      });
+      mock.onGet('/transfers?page=2&limit=2').reply(200, {
+        transactions: [txPage('t_3')],
+        total: 3,
+        page: 2,
+        limit: 2
+      });
+
+      const ids: string[] = [];
+      for await (const tx of client.iterateTransactions(2)) {
+        ids.push(tx._id);
+      }
+
+      expect(ids).toEqual(['t_1', 't_2', 't_3']);
+    });
+  });
+
+  describe('fromEnv', () => {
+    const originalEnv = process.env;
+
+    beforeEach(() => {
+      process.env = { ...originalEnv };
+    });
+
+    afterEach(() => {
+      process.env = originalEnv;
+    });
+
+    it('builds a client from FINPAY_* environment variables', () => {
+      process.env.FINPAY_TOKEN = 'env-token';
+      process.env.FINPAY_API_BASE = 'https://api.env.example.com';
+
+      const envClient = FinPayClient.fromEnv();
+      expect(envClient).toBeInstanceOf(FinPayClient);
+    });
+
+    it('throws when no token is available', () => {
+      delete process.env.FINPAY_TOKEN;
+      expect(() => FinPayClient.fromEnv()).toThrow(ValidationError);
+    });
+  });
+
+  describe('webhook event namespacing', () => {
+    it('emits webhook events prefixed with webhook: so untrusted event names can never collide with EventEmitter internals', () => {
+      const payload: WebhookPayload = {
+        event: 'payment.completed',
+        data: {
+          transactionId: 't_123',
+          senderEmail: 'sender@example.com',
+          receiverEmail: 'receiver@example.com',
+          amount: 15000,
+          currency: 'INR',
+          status: 'COMPLETED',
+          failureReason: '',
+          timestamp: '2026-07-19T18:15:25.105Z'
+        }
+      };
+      const secret = 'test-secret';
+      const signature = crypto
+        .createHmac('sha256', secret)
+        .update(JSON.stringify(payload))
+        .digest('hex');
+
+      const received: any[] = [];
+      client.on('webhook:payment.completed', (data) => received.push(data));
+
+      const isValid = FinPayClient.handleWebhook(payload, signature, secret, client);
+
+      expect(isValid).toBe(true);
+      expect(received).toHaveLength(1);
+      expect(received[0].transactionId).toBe('t_123');
     });
   });
 });

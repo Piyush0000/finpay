@@ -1,19 +1,19 @@
-# FinPay Node.js SDK v2.0 🚀
+# FinPay Node.js SDK v2.0.1
 
 Official Node.js client library wrapper for the **FinPay** distributed payments core. Now with TypeScript support, automatic retry logic, advanced error handling, and real-time event streaming.
 
 ---
 
-## ✨ What's New in v2.0
+## What's New in v2.0
 
-- 🎯 **Full TypeScript Support** - Complete type definitions for better developer experience
-- 🔄 **Automatic Retry Logic** - Exponential backoff for failed requests
-- 🛡️ **Advanced Error Handling** - Specific error types (Authentication, Validation, Network, RateLimit)
-- ✅ **Input Validation** - Automatic validation of requests before API calls
-- 📡 **Event Emitter** - Real-time transfer status updates via events
-- 🔍 **Request Logging** - Built-in logging for debugging
-- 🧪 **Comprehensive Tests** - Full test suite with Jest
-- 📚 **Better Documentation** - Enhanced JSDoc comments
+- **Full TypeScript Support** - Complete type definitions for better developer experience
+- **Automatic Retry Logic** - Exponential backoff for failed requests
+- **Advanced Error Handling** - Specific error types (Authentication, Validation, Network, RateLimit)
+- **Input Validation** - Automatic validation of requests before API calls
+- **Event Emitter** - Real-time transfer status updates via events
+- **Request Logging** - Built-in logging for debugging
+- **Comprehensive Tests** - Full test suite with Jest
+- **Better Documentation** - Enhanced JSDoc comments
 
 ---
 
@@ -291,4 +291,4 @@ MIT © Piyush Rathore
 
 ## Support
 
-For issues, questions, or contributions, please visit the [GitHub repository](https://github.com/piyush2205/finpay-sdk).
+For issues, questions, or contributions, please visit the [GitHub repository](https://github.com/Piyush0000/finpay/tree/main/packages/sdk).

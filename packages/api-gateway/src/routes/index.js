@@ -1,5 +1,6 @@
 const { createProxyMiddleware } = require('http-proxy-middleware')
 const config = require('../config')
+const { getServiceCircuitBreaker } = require('../middleware/circuitBreakerProxy')
 
 function setupRoutes(app, jwtVerify) {
   const proxyOpts = { changeOrigin: true }
@@ -62,6 +63,12 @@ function setupRoutes(app, jwtVerify) {
       pathRewrite: { '^': '/payment-links' },
     })
   )
+
+  // Circuit breaker status endpoint (for monitoring)
+  app.get('/api/circuit-breaker/status', (req, res) => {
+    const { getAllCircuitBreakerStatuses } = require('../middleware/circuitBreakerProxy')
+    res.json(getAllCircuitBreakerStatuses())
+  })
 }
 
 module.exports = { setupRoutes }

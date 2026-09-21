@@ -6,7 +6,13 @@ const mongoose = require('mongoose')
 const cors = require('cors')
 const FinPayClient = require('@piyush2205/finpay-sdk')
 const PaymentLink = require('./models/PaymentLink')
-const { createLogger } = require('@finpay/shared')
+const { createLogger, initializeTracing, requestId } = require('@finpay/shared')
+
+// Initialize OpenTelemetry tracing
+initializeTracing({
+  serviceName: 'payment-link-service',
+  serviceVersion: '1.0.0'
+})
 
 const logger = createLogger('payment-link-service')
 const app = express()
@@ -16,6 +22,7 @@ const apiGatewayUrl = process.env.API_GATEWAY_URL || 'http://api-gateway:3000/ap
 
 app.use(cors())
 app.use(express.json())
+app.use(requestId)
 
 // ── Database Connection ──────────────────────────────────────────────────────
 async function connectMongo() {

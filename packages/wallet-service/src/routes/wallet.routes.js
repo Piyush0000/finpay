@@ -13,4 +13,10 @@ router.post('/internal/debit', walletController.internalDebit)
 router.post('/internal/credit', walletController.internalCredit)
 router.get('/internal/by-user/:userId', walletController.internalGetByUser)
 
+// circuit breaker status endpoint (for monitoring)
+router.get('/internal/circuit-breaker/status', (req, res) => {
+  const WalletService = require('../services/wallet.service')
+  res.json(WalletService.getCircuitBreakerStatus())
+})
+
 module.exports = router

@@ -1,10 +1,16 @@
 const express = require('express')
-const { requestId, createLogger, createRateLimiter } = require('@finpay/shared')
+const { requestId, createLogger, createRateLimiter, initializeTracing } = require('@finpay/shared')
 const { jwtVerify } = require('./middleware/jwtVerify')
 const { setupRoutes } = require('./routes')
 const config = require('./config')
 
 const cors = require('cors')
+
+// Initialize OpenTelemetry tracing
+initializeTracing({
+  serviceName: 'api-gateway',
+  serviceVersion: '1.0.0'
+})
 
 const app = express()
 const logger = createLogger('api-gateway')
@@ -39,7 +45,11 @@ app.use('/api', globalRateLimiter)
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'api-gateway', timestamp: new Date().toISOString() })
+  res.json({ 
+    status: 'ok', 
+    service: 'api-gateway', 
+    timestamp: new Date().toISOString()
+  })
 })
 
 setupRoutes(app, jwtVerify)

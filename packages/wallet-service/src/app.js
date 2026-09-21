@@ -1,8 +1,14 @@
 const express = require('express')
 const mongoose = require('mongoose')
-const { requestId, errorHandler, createLogger } = require('@finpay/shared')
+const { requestId, errorHandler, createLogger, initializeTracing } = require('@finpay/shared')
 const config = require('./config')
 const walletRoutes = require('./routes/wallet.routes')
+
+// Initialize OpenTelemetry tracing
+initializeTracing({
+  serviceName: 'wallet-service',
+  serviceVersion: '1.0.0'
+})
 
 const app = express()
 const logger = createLogger('wallet-service')
